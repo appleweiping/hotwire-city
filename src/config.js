@@ -7,8 +7,10 @@ export const STEP = 1 / 60;          // fixed simulation timestep
 export const MAX_FRAME_DELTA = 0.25; // clamp huge rAF gaps (tab switch) to avoid spiral of death
 
 export const TILE = 32;
-export const MAP_W = 96;             // tiles
-export const MAP_H = 96;
+// 92 = 2×water + 8×(4-wide road) + 7×(8-wide block): the only symmetric fit
+// for a perimeter ring road + 7×7 block grid (8 + 12n must equal the size).
+export const MAP_W = 92;             // tiles
+export const MAP_H = 92;
 export const WORLD_W = MAP_W * TILE; // 3072
 export const WORLD_H = MAP_H * TILE;
 export const MAP_SEED = 1337;        // same seed → same city (deterministic PRNG)

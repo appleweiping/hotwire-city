@@ -5,6 +5,7 @@ import { Entity } from './entity.js';
 import { PLAYER, WEAPONS, WEAPON_ORDER } from '../config.js';
 import { input } from '../input.js';
 import { clamp } from '../utils.js';
+import { moveCircle } from '../systems/physics.js';
 
 export class Player extends Entity {
   constructor(x, y) {
@@ -49,9 +50,7 @@ export class Player extends Entity {
     const m = world.mouseWorld;
     this.angle = Math.atan2(m.y - this.y, m.x - this.x);
 
-    // Position integration + wall sliding handled by physics system (milestone 2)
-    this.x += this.vx * dt;
-    this.y += this.vy * dt;
+    moveCircle(this, dt, world.map); // integrate with wall sliding
   }
 
   render(ctx) {

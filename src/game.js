@@ -5,10 +5,11 @@
 //   input → physics → collision → damage/crime → queue events →
 //   AI consumes last tick's events → spawn/recycle → render
 
-import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, WORLD_W, WORLD_H, COLORS } from './config.js';
+import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS } from './config.js';
 import { input } from './input.js';
 import { Camera } from './camera.js';
 import { Renderer } from './renderer.js';
+import { CityMap } from './world/citymap.js';
 import { Player } from './entities/player.js';
 
 export class Game {
@@ -18,6 +19,8 @@ export class Game {
     this.viewport = viewport;
     this.renderer = new Renderer(this.ctx, viewport);
     this.camera = new Camera();
+    this.map = new CityMap();          // deterministic: one city, forever
+    this.renderer.setMap(this.map);
 
     this.entities = [];
     this.player = null;
@@ -51,9 +54,9 @@ export class Game {
   }
 
   startRun() {
-    // Fresh world for a new run (map arrives in milestone 2)
     this.entities.length = 0;
-    this.player = new Player(WORLD_W / 2, WORLD_H / 2);
+    const s = this.map.playerSpawn;
+    this.player = new Player(s.x, s.y);
     this.entities.push(this.player);
     this.camera.snapTo(this.player.x, this.player.y);
     this.time = 0;
@@ -64,6 +67,7 @@ export class Game {
   // import game.js — everything they may touch is threaded through here.
   buildWorldContext() {
     return {
+      map: this.map,
       camera: this.camera,
       player: this.player,
       entities: this.entities,
