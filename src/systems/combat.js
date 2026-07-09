@@ -44,6 +44,7 @@ export function fireHitscan(world, shooter, ox, oy, aimAngle, weaponName, spread
     fx.muzzle(ox + Math.cos(aimAngle) * 6, oy + Math.sin(aimAngle) * 6, aimAngle);
     fx.tracer(ox, oy, hx, hy);
   }
+  world.audio && world.audio.shoot(weaponName === 'copPistol' ? 'pistol' : weaponName);
 
   world.emit({ type: 'gunshot', x: ox, y: oy, radius: 250, source: shooter });
 

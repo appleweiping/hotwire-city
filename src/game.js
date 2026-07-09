@@ -5,7 +5,7 @@
 //   input → physics → collision → damage/crime → queue events →
 //   AI consumes last tick's events → spawn/recycle → render
 
-import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS, TILE, TRAFFIC_MIX, VEHICLE, PLAYER, FX, ECONOMY } from './config.js';
+import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS, TILE, TRAFFIC_MIX, VEHICLE, PLAYER, FX, ECONOMY, SAVE_KEY } from './config.js';
 import { input } from './input.js';
 import { makeRng, rngWeighted, dist } from './utils.js';
 import { Camera } from './camera.js';
@@ -20,6 +20,8 @@ import { SpatialHash, entityCollisionPass } from './systems/physics.js';
 import { fireHitscan } from './systems/combat.js';
 import { Spawner } from './systems/spawner.js';
 import { WantedSystem } from './systems/wanted.js';
+import { Hud } from './ui/hud.js';
+import { GameAudio } from './audio.js';
 
 export class Game {
   constructor(canvas, viewport) {
@@ -37,8 +39,19 @@ export class Game {
     this.hash = new SpatialHash();
     this.spawner = new Spawner();
     this.wanted = new WantedSystem();
+    this.hud = new Hud(this.map);
+    this.audio = new GameAudio();
     this.money = 0;
     this.maxCash = 0;
+    try {
+      const saved = JSON.parse(localStorage.getItem(SAVE_KEY) || '{}');
+      this.maxCash = saved.maxCash || 0;
+    } catch { /* fresh start */ }
+
+    // contextual first-time hints, each shown at most twice
+    this.hintState = { steal: 0, stealActive: false, wanted: 0, death: 0 };
+    this.timedHint = null;       // {text, until}
+    this.currentHint = null;
     this.explosionQueue = [];    // {v, delay} — chained blasts resolve over time
     this.time = 0;               // total simulated seconds
     this.tick = 0;
@@ -150,10 +163,15 @@ export class Game {
       addDecal: (d) => this.renderer.addDecal(d),
       fx: this.fx,
       queryCircle: (x, y, r, out) => this.hash.queryCircle(x, y, r, out),
+      audio: this.audio,
       explodeVehicle: (v) => this.queueExplosion(v),
       onCarCrash: (v, impact) => {
         if (this.player && this.player.vehicle === v) {
           this.fx.addTrauma(FX.TRAUMA_CRASH * Math.min(1, impact / 250));
+        }
+        // only audible crashes near the camera
+        if (Math.abs(v.x - this.camera.x) < 800 && Math.abs(v.y - this.camera.y) < 600) {
+          this.audio.crash(Math.min(1, impact / 250));
         }
       },
       onCarHitsPerson: (v, person, speed) => this.handleRunOver(ctx, v, person, speed),
@@ -226,6 +244,7 @@ export class Game {
     const byPlayer = v.lastHitByPlayer;
     v.becomeWreck();
     this.fx.explosion(x, y);
+    this.audio.explosion();
     this.renderer.addDecal({ x, y, kind: 'scorch', size: 34 });
 
     if (byPlayer) {
@@ -271,11 +290,16 @@ export class Game {
       this.accumulator += delta;
       while (this.accumulator >= STEP) {
         this.updateMouseWorld();
+        if (input.wasPressed('mute')) {
+          this.audio.toggleMute();
+          this.saveGame();
+        }
         this.state.update(STEP);
         input.endTick();
         this.accumulator -= STEP;
       }
 
+      this.audio.update(this);
       this.renderer.render(this);
       requestAnimationFrame(frame);
     };
@@ -325,6 +349,8 @@ export class Game {
     this.eventsThisTick = tmp;
     this.eventsThisTick.length = 0;
 
+    this.#updateHints(dt);
+
     this.camera.follow(this.player, dt, this.player.driving);
     this.time += dt;
     this.tick++;
@@ -332,8 +358,54 @@ export class Game {
 
   addMoney(n, x, y) {
     this.money = Math.max(0, this.money + n);
-    this.maxCash = Math.max(this.maxCash, this.money);
+    if (this.money > this.maxCash) {
+      this.maxCash = this.money;
+      this.saveGame();
+    }
     if (n > 0 && x !== undefined) this.fx.floatText(x, y, `+$${n}`, '#7fc95c');
+  }
+
+  saveGame() {
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ maxCash: this.maxCash, muted: this.audio.muted }));
+    } catch { /* storage unavailable — shrug */ }
+  }
+
+  // Contextual first-time hints (each shown at most twice, then retired)
+  #updateHints(dt) {
+    const h = this.hintState;
+    const p = this.player;
+
+    if (this.timedHint) {
+      if (this.time > this.timedHint.until) this.timedHint = null;
+      else { this.currentHint = this.timedHint.text; return; }
+    }
+
+    // first wanted star tip
+    if (this.wanted.stars > 0 && h.wanted < 2 && !this.wantedHintArmed) {
+      this.wantedHintArmed = true;
+      h.wanted++;
+      this.timedHint = { text: 'Break line of sight and lay low to lose the cops', until: this.time + 4 };
+      return;
+    }
+    if (this.wanted.stars === 0) this.wantedHintArmed = false;
+
+    // steal-a-car prompt
+    if (p && p.alive && !p.driving && p.nearbyVehicle && h.steal < 2) {
+      const jack = p.nearbyVehicle.driver ? 'STEAL CAR' : 'ENTER CAR';
+      this.currentHint = `E — ${jack}`;
+      h.stealActive = true;
+      return;
+    }
+    if (h.stealActive) { h.stealActive = false; h.steal++; }
+
+    this.currentHint = null;
+  }
+
+  showDeathHint() {
+    if (this.hintState.death >= 2) return;
+    this.hintState.death++;
+    this.timedHint = { text: 'You lost some cash — the city keeps score', until: this.time + 4 };
   }
 
   respawnPlayer(door) {
@@ -361,6 +433,11 @@ export class Game {
   renderWorldFx(ctx) {
     this.fx.render(ctx);
   }
+
+  renderHud(ctx) {
+    if (this.stateName === 'menu') return;
+    this.hud.render(ctx, this);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -373,6 +450,7 @@ class MenuState {
   exit() {}
   update(dt) {
     if (input.wasPressed('any')) {
+      this.game.audio.unlock(); // browsers require a user gesture for audio
       this.game.startRun();
       this.game.setState('playing');
     }
@@ -384,11 +462,22 @@ class MenuState {
     ctx.textAlign = 'center';
     ctx.fillStyle = COLORS.accent;
     ctx.font = '700 64px "Segoe UI", sans-serif';
-    ctx.fillText('HOTWIRE CITY', VIEW_W / 2, VIEW_H / 2 - 60);
+    ctx.fillText('HOTWIRE CITY', VIEW_W / 2, VIEW_H / 2 - 70);
+
+    ctx.fillStyle = COLORS.hudDim;
+    ctx.font = '600 15px "Segoe UI", sans-serif';
+    ctx.fillText('Steal cars. Outrun the law. Keep the meter climbing.', VIEW_W / 2, VIEW_H / 2 - 34);
+
+    if (this.game.maxCash > 0) {
+      ctx.fillStyle = COLORS.good;
+      ctx.font = '700 17px "Segoe UI", sans-serif';
+      ctx.fillText(`BEST  $${Math.round(this.game.maxCash).toLocaleString('en-US')}`, VIEW_W / 2, VIEW_H / 2 - 4);
+    }
 
     ctx.fillStyle = COLORS.hudText;
     ctx.font = '400 20px "Segoe UI", sans-serif';
-    ctx.fillText('Press any key to start', VIEW_W / 2, VIEW_H / 2 + 10);
+    const blink = Math.floor(performance.now() / 600) % 2 === 0;
+    if (blink) ctx.fillText('Press any key to start', VIEW_W / 2, VIEW_H / 2 + 40);
 
     ctx.fillStyle = COLORS.hudDim;
     ctx.font = '400 14px "Segoe UI", sans-serif';
@@ -396,7 +485,7 @@ class MenuState {
       'WASD — move / drive     E — enter or steal a car     Mouse — aim, click to shoot',
       'Shift — sprint     Space — handbrake     1/2/3 or Q — weapons     M — mute     Esc — pause',
     ];
-    lines.forEach((l, i) => ctx.fillText(l, VIEW_W / 2, VIEW_H / 2 + 70 + i * 24));
+    lines.forEach((l, i) => ctx.fillText(l, VIEW_W / 2, VIEW_H / 2 + 92 + i * 24));
     ctx.textAlign = 'left';
   }
 }
@@ -443,6 +532,7 @@ class EndedState {
     if (this.timer <= 0 && (input.wasPressed('any') || this.timer < -2.5)) {
       const door = this.label === 'BUSTED' ? this.game.map.policeDoor : this.game.map.hospitalDoor;
       this.game.respawnPlayer(door);
+      this.game.showDeathHint();
       this.game.setState('playing');
     }
   }

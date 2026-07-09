@@ -280,6 +280,7 @@ export class Player extends Entity {
   takeDamage(amount, world, source) {
     if (!this.alive || this.invulnTimer > 0) return;
     this.damageFlash = 0.3; // HUD red vignette reads this
+    if (world && world.audio) world.audio.hurt();
     super.takeDamage(amount, world, source);
   }
 

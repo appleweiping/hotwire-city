@@ -37,6 +37,7 @@ export class Pickup extends Entity {
   }
 
   #collect(world, p) {
+    world.audio && world.audio.pickup();
     if (this.type === 'ammo') {
       p.ammo[this.data.weapon] += this.data.amount;
       world.fx.floatText(this.x, this.y - 10, `+${this.data.amount} ${this.data.weapon.toUpperCase()}`, '#c9d4f0');
