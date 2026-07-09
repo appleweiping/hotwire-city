@@ -2,9 +2,9 @@
 // Vehicle & combat behaviour arrive in later milestones; structure is final.
 
 import { Entity } from './entity.js';
-import { PLAYER, WEAPONS, WEAPON_ORDER } from '../config.js';
+import { PLAYER, T, VEHICLE, WEAPONS, WEAPON_ORDER } from '../config.js';
 import { input } from '../input.js';
-import { clamp } from '../utils.js';
+import { clamp, dist } from '../utils.js';
 import { moveCircle } from '../systems/physics.js';
 
 export class Player extends Entity {
@@ -15,7 +15,10 @@ export class Player extends Entity {
     this.hp = PLAYER.MAX_HP;
     this.maxHp = PLAYER.MAX_HP;
     this.vehicle = null;         // Vehicle instance while driving
-    this.enteringTimer = 0;      // >0 while enter/exit animation locks input
+    this.enteringTimer = 0;      // >0 while the enter animation locks input
+    this.pendingVehicle = null;  // vehicle being entered
+    this.exitRequested = false;  // E pressed at speed → auto-brake then exit
+    this.nearbyVehicle = null;   // for the contextual "E — STEAL CAR" hint
     this.knockdownTimer = 0;
     this.invulnTimer = 0;
     this.weapon = 'fist';
@@ -30,6 +33,13 @@ export class Player extends Entity {
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
 
+    // mid enter-animation: frozen and out of the collision world
+    if (this.enteringTimer > 0) {
+      this.enteringTimer -= dt;
+      if (this.enteringTimer <= 0 && this.pendingVehicle) this.#finishEntering(world);
+      return;
+    }
+
     if (this.knockdownTimer > 0) {
       this.knockdownTimer -= dt;
       this.vx = 0; this.vy = 0;
@@ -37,7 +47,7 @@ export class Player extends Entity {
       return;
     }
 
-    if (this.driving) return; // vehicle drives; player rides along (milestone 3)
+    if (this.driving) { this.#updateDriving(world); return; }
 
     // --- on-foot movement ---
     const move = input.moveVector();
@@ -51,6 +61,114 @@ export class Player extends Entity {
     this.angle = Math.atan2(m.y - this.y, m.x - this.x);
 
     moveCircle(this, dt, world.map); // integrate with wall sliding
+
+    // --- vehicle interaction ---
+    this.nearbyVehicle = this.#findNearestVehicle(world);
+    if (this.nearbyVehicle && input.wasPressed('interact')) {
+      this.#beginEntering(world, this.nearbyVehicle);
+    }
+  }
+
+  #updateDriving(world) {
+    const v = this.vehicle;
+    // ride along (camera + damage checks use player position/velocity)
+    this.x = v.x; this.y = v.y;
+    this.vx = v.vx; this.vy = v.vy;
+    this.angle = v.angle;
+
+    if (v.wrecked) { this.#tryExit(world) || this.#forceExit(world); return; }
+
+    if (input.wasPressed('interact')) {
+      if (Math.abs(v.fwdSpeed()) <= VEHICLE.EXIT_MAX_SPEED) this.#tryExit(world);
+      else this.exitRequested = true; // vehicle auto-brakes while this is set
+    }
+    if (this.exitRequested && Math.abs(v.fwdSpeed()) <= VEHICLE.EXIT_MAX_SPEED) {
+      this.#tryExit(world);
+    }
+  }
+
+  #findNearestVehicle(world) {
+    let best = null, bestD = Infinity;
+    for (const e of world.entities) {
+      if (e.kind !== 'vehicle' || e.wrecked) continue;
+      const d = dist(this.x, this.y, e.x, e.y) - e.radius * 0.5;
+      if (d < bestD && d <= VEHICLE.ENTER_DIST) { bestD = d; best = e; }
+    }
+    return best;
+  }
+
+  #beginEntering(world, v) {
+    const occupied = v.driver && v.driver !== this;
+    if (occupied && v.speed() > VEHICLE.JACK_MAX_SPEED) return; // can't jack at speed
+    this.pendingVehicle = v;
+    this.enteringTimer = occupied ? VEHICLE.ENTER_TIME_JACK : VEHICLE.ENTER_TIME_EMPTY;
+    this.solid = false;          // fully out of the collision world during the animation
+    this.vx = 0; this.vy = 0;
+    this.moving = false;
+    this.nearbyVehicle = null;
+  }
+
+  #finishEntering(world) {
+    const v = this.pendingVehicle;
+    this.pendingVehicle = null;
+    if (!v || v.wrecked) { this.solid = true; return; }
+    if (v.driver && v.driver !== this) {
+      world.onCarJacked && world.onCarJacked(v, this); // ejects driver, reports crime
+    }
+    v.driver = this;
+    this.vehicle = v;
+    this.exitRequested = false;
+  }
+
+  // Exit spots tried in order: left, right, rear, front — first one that is
+  // free of walls, water and other vehicles wins.
+  #tryExit(world) {
+    const v = this.vehicle;
+    const cos = Math.cos(v.angle), sin = Math.sin(v.angle);
+    const side = v.spec.h / 2 + 12, ends = v.spec.w / 2 + 14;
+    const candidates = [
+      [sin * side, -cos * side],
+      [-sin * side, cos * side],
+      [-cos * ends, -sin * ends],
+      [cos * ends, sin * ends],
+    ];
+    for (const [ox, oy] of candidates) {
+      const px = v.x + ox, py = v.y + oy;
+      if (!this.#spotFree(world, px, py)) continue;
+      this.x = px; this.y = py;
+      this.vx = 0; this.vy = 0;
+      v.driver = null;
+      this.vehicle = null;
+      this.exitRequested = false;
+      this.solid = true;
+      return true;
+    }
+    return false; // boxed in — stay in the car
+  }
+
+  #spotFree(world, px, py) {
+    const r = this.radius;
+    const map = world.map;
+    for (const [dx, dy] of [[0, 0], [r, 0], [-r, 0], [0, r], [0, -r]]) {
+      const t = map.tileAtWorld(px + dx, py + dy);
+      if (t === T.BUILDING || t === T.WATER) return false;
+    }
+    for (const e of world.entities) {
+      if (e.kind !== 'vehicle' || e === this.vehicle) continue;
+      if (dist(px, py, e.x, e.y) < r + e.radius) return false;
+    }
+    return true;
+  }
+
+  // Last resort when the car is destroyed and every exit is blocked.
+  #forceExit(world) {
+    const v = this.vehicle;
+    this.x = v.x; this.y = v.y - v.spec.h / 2 - 14;
+    this.vx = 0; this.vy = 0;
+    v.driver = null;
+    this.vehicle = null;
+    this.exitRequested = false;
+    this.solid = true;
   }
 
   render(ctx) {

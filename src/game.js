@@ -5,12 +5,14 @@
 //   input → physics → collision → damage/crime → queue events →
 //   AI consumes last tick's events → spawn/recycle → render
 
-import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS } from './config.js';
+import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS, TILE, TRAFFIC_MIX } from './config.js';
 import { input } from './input.js';
+import { makeRng, rngWeighted } from './utils.js';
 import { Camera } from './camera.js';
 import { Renderer } from './renderer.js';
 import { CityMap } from './world/citymap.js';
 import { Player } from './entities/player.js';
+import { Vehicle } from './entities/vehicle.js';
 
 export class Game {
   constructor(canvas, viewport) {
@@ -58,9 +60,43 @@ export class Game {
     const s = this.map.playerSpawn;
     this.player = new Player(s.x, s.y);
     this.entities.push(this.player);
+    this.#spawnParkedCars();
     this.camera.snapTo(this.player.x, this.player.y);
     this.time = 0;
     this.tick = 0;
+  }
+
+  // Empty cars parked along the curb all over the city — always something to steal.
+  #spawnParkedCars() {
+    const rng = makeRng(777);
+    const placed = [];
+    let attempts = 400;
+    while (attempts-- > 0 && placed.length < 45) {
+      const rt = this.map.roadTiles[Math.floor(rng() * this.map.roadTiles.length)];
+      const wx = (rt.tx + 0.5) * TILE, wy = (rt.ty + 0.5) * TILE;
+      const lane = this.map.laneInfoAt(wx, wy);
+      if (!lane || !lane.dir) continue;
+
+      // hug the curb side of the lane, aligned with traffic direction
+      let x, y, angle;
+      if (lane.axis === 'v') {
+        x = lane.laneCenter + (lane.dir.y > 0 ? -20 : 20);
+        y = wy;
+        angle = lane.dir.y > 0 ? Math.PI / 2 : -Math.PI / 2;
+      } else {
+        x = wx;
+        y = lane.laneCenter + (lane.dir.x > 0 ? 20 : -20);
+        angle = lane.dir.x > 0 ? 0 : Math.PI;
+      }
+
+      if (placed.some(p => (p.x - x) ** 2 + (p.y - y) ** 2 < 90 * 90)) continue;
+      // one free sports car near spawn would be too kind — plain traffic mix
+      const type = rngWeighted(rng, TRAFFIC_MIX);
+      const v = new Vehicle(x, y, type);
+      v.angle = angle;
+      this.entities.push(v);
+      placed.push({ x, y });
+    }
   }
 
   // The world context handed to every entity/system update. Entities never
@@ -76,6 +112,11 @@ export class Game {
       events: this.eventsLastTick,
       emit: (evt) => this.eventsThisTick.push(evt),
       addEntity: (e) => this.entities.push(e),
+      addDecal: (d) => this.renderer.addDecal(d),
+      // stubs fleshed out by later systems (combat, wanted, spawner)
+      onCarJacked: (v, by) => { v.driver = null; },
+      onCarCrash: (v, impact) => {},
+      explodeVehicle: (v, source) => { v.becomeWreck(); },
     };
   }
 
@@ -120,6 +161,14 @@ export class Game {
         this.entities[i] = this.entities[last];
         this.entities.pop();
       }
+    }
+
+    // player updates before their vehicle in the entity array — re-sync so the
+    // camera and damage checks see this tick's true position, not last tick's
+    if (this.player && this.player.driving) {
+      const v = this.player.vehicle;
+      this.player.x = v.x; this.player.y = v.y;
+      this.player.vx = v.vx; this.player.vy = v.vy;
     }
 
     // rotate event buffers: this tick's emissions become next tick's inputs
