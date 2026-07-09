@@ -13,9 +13,11 @@ import { Renderer } from './renderer.js';
 import { CityMap } from './world/citymap.js';
 import { Player } from './entities/player.js';
 import { Vehicle } from './entities/vehicle.js';
+import { Pedestrian } from './entities/pedestrian.js';
 import { Fx } from './systems/fx.js';
 import { SpatialHash, entityCollisionPass } from './systems/physics.js';
 import { fireHitscan } from './systems/combat.js';
+import { Spawner } from './systems/spawner.js';
 
 export class Game {
   constructor(canvas, viewport) {
@@ -31,6 +33,7 @@ export class Game {
     this.player = null;
     this.fx = new Fx();
     this.hash = new SpatialHash();
+    this.spawner = new Spawner();
     this.explosionQueue = [];    // {v, delay} — chained blasts resolve over time
     this.time = 0;               // total simulated seconds
     this.tick = 0;
@@ -100,6 +103,7 @@ export class Game {
       const type = rngWeighted(rng, TRAFFIC_MIX);
       const v = new Vehicle(x, y, type);
       v.angle = angle;
+      v.persistent = true; // world furniture — never recycled by the spawner
       this.entities.push(v);
       placed.push({ x, y });
     }
@@ -128,8 +132,10 @@ export class Game {
         }
       },
       onCarHitsPerson: (v, person, speed) => this.handleRunOver(ctx, v, person, speed),
-      // stubs fleshed out by later systems (wanted, spawner, economy)
-      onCarJacked: (v, by) => { v.driver = null; },
+      tick: this.tick,
+      lodSkip: (e) => this.lodSkip(e),
+      wantedStars: () => 0, // replaced by the wanted system (m6)
+      // stubs fleshed out by later systems (wanted, economy)
       reportCrime: (type, x, y) => {},
       addMoney: (n, x, y) => {},
       // placeholder respawn until the WASTED/BUSTED flow lands (m6)
@@ -137,7 +143,34 @@ export class Game {
     };
     ctx.shoot = (shooter, ox, oy, angle, weapon, spreadScale) =>
       fireHitscan(ctx, shooter, ox, oy, angle, weapon, spreadScale);
+    // Jacking a driven car throws its driver onto the street in a panic.
+    ctx.onCarJacked = (v, by) => {
+      const wasAi = v.driver && v.driver.kind === 'ai';
+      v.driver = null;
+      if (wasAi) {
+        const sin = Math.sin(v.angle), cos = Math.cos(v.angle);
+        const off = v.spec.h / 2 + 12;
+        let px = v.x + sin * off, py = v.y - cos * off;      // far-side door
+        if (this.map.isSolidAt(px, py) || this.map.isWaterAt(px, py)) {
+          px = v.x - sin * off; py = v.y + cos * off;
+        }
+        const ped = new Pedestrian(px, py);
+        ped.panic(by ? by.x : v.x, by ? by.y : v.y);
+        this.entities.push(ped);
+      }
+      if (by && by.kind === 'player') {
+        ctx.reportCrime('CARJACK', v.x, v.y);
+        ctx.addMoney(5, v.x, v.y);
+      }
+    };
     return ctx;
+  }
+
+  // Off-screen AI entities only think every 4th tick.
+  lodSkip(e) {
+    const dx = Math.abs(e.x - this.camera.x), dy = Math.abs(e.y - this.camera.y);
+    if (dx < VIEW_W / 2 + 100 && dy < VIEW_H / 2 + 100) return false;
+    return (this.tick + e.id) % 4 !== 0;
   }
 
   queueExplosion(v) {
@@ -230,6 +263,7 @@ export class Game {
 
     entityCollisionPass(this.hash, this.entities, world);
     this.processExplosions(world, dt);
+    this.spawner.update(dt, world);
     this.fx.update(dt);
 
     // swap-remove dead-and-expired entities (corpses linger via their own timers)

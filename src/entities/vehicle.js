@@ -56,11 +56,16 @@ export class Vehicle extends Entity {
         this.controls.steer = (input.isDown('right') ? 1 : 0) + (input.isDown('left') ? -1 : 0);
         this.controls.handbrake = input.isDown('handbrake');
       }
+    } else if (this.driver && this.driver.kind === 'ai') {
+      if (world.lodSkip && world.lodSkip(this)) return; // off-screen traffic thinks less
+      this.driver.drive(this, dt, world);
     } else if (!this.driver) {
       // parked / abandoned: roll to a stop
       this.controls.throttle = 0;
       this.controls.steer = 0;
       this.controls.handbrake = false;
+      // cold parked car: skip physics entirely (big win with 45+ parked cars)
+      if (this.speed() < 1 && this.fireFuse < 0 && this.hp / this.maxHp > VEHICLE.SMOKE_HP) return;
     }
 
     this.#integrate(dt, world);
