@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HOTWIRE CITY</title>
+  <meta name="description" content="A zero-dependency top-down open-city crime game inspired by classic GTA. Steal cars, outrun the cops, survive the chaos.">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #0d0d11;
+      overflow: hidden;
+      font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    }
+    #game {
+      display: block;
+      width: 100%; height: 100%;
+      cursor: crosshair;
+    }
+    /* Shown only on touch-only devices (no keyboard/mouse) */
+    #touch-notice {
+      display: none;
+      position: fixed; inset: 0;
+      background: #14141a;
+      color: #e8e6df;
+      flex-direction: column;
+      align-items: center; justify-content: center;
+      text-align: center;
+      padding: 32px;
+      gap: 16px;
+    }
+    #touch-notice h1 { font-size: 2rem; letter-spacing: 0.2em; color: #f2b134; }
+    #touch-notice p { max-width: 32rem; line-height: 1.6; color: #9a97a3; }
+    body.touch-only #touch-notice { display: flex; }
+    body.touch-only #game { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="game"></canvas>
+  <div id="touch-notice">
+    <h1>HOTWIRE CITY</h1>
+    <p>This game is played with a keyboard and mouse and is best experienced in a desktop browser.</p>
+    <p>Touch controls are on the roadmap &mdash; check back soon!</p>
+  </div>
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
