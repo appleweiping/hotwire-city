@@ -171,6 +171,8 @@ export const WEAPONS = {
   fist:   { name: 'FIST',   dmg: 10, rate: 2,  range: 24,  spread: 0,                    ammo: Infinity, melee: true },
   pistol: { name: 'PISTOL', dmg: 15, rate: 4,  range: 450, spread: 1.5 * Math.PI / 180,  ammo: 60,       melee: false },
   smg:    { name: 'SMG',    dmg: 8,  rate: 10, range: 350, spread: 4 * Math.PI / 180,    ammo: 0,        melee: false, auto: true },
+  // police sidearm (not player-selectable; rate lives in COP config)
+  copPistol: { name: 'COP', dmg: 8, rate: 1.2, range: 380, spread: 6 * Math.PI / 180, ammo: Infinity, melee: false },
 };
 export const WEAPON_ORDER = ['fist', 'pistol', 'smg'];
 export const AMMO_DROP = { pistol: 20, smg: 30 };  // dead cops drop one of these (50/50)

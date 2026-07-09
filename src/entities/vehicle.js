@@ -188,6 +188,17 @@ export class Vehicle extends Entity {
     }
   }
 
+  takeDamage(amount, world, source) {
+    // remember player culpability for the eventual explosion payout/heat
+    if (source && source.by) {
+      const by = source.by;
+      if (by.kind === 'player' || (by.driver && by.driver.kind === 'player')) {
+        this.lastHitByPlayer = true;
+      }
+    }
+    super.takeDamage(amount, world, source);
+  }
+
   die(world, source) {
     // hp exhausted → explode now, even if the fire fuse was still burning
     if (this.wrecked) return;

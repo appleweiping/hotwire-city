@@ -31,6 +31,7 @@ export class Player extends Entity {
   get driving() { return this.vehicle !== null; }
 
   update(dt, world) {
+    if (!this.alive) { this.vx = 0; this.vy = 0; return; } // death cam
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.damageFlash > 0) this.damageFlash -= dt;
@@ -206,6 +207,22 @@ export class Player extends Entity {
 
   render(ctx) {
     if (this.driving) return;
+    if (!this.alive) {
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.angle + Math.PI / 2);
+      ctx.globalAlpha = 0.9;
+      ctx.fillStyle = '#3d6bb3';
+      ctx.beginPath();
+      ctx.ellipse(0, 0, this.radius + 2, this.radius - 1.5, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#e8c39e';
+      ctx.beginPath();
+      ctx.arc(0, -this.radius - 1, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+      return;
+    }
     const knocked = this.knockdownTimer > 0;
 
     ctx.save();

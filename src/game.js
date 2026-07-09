@@ -5,7 +5,7 @@
 //   input → physics → collision → damage/crime → queue events →
 //   AI consumes last tick's events → spawn/recycle → render
 
-import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS, TILE, TRAFFIC_MIX, VEHICLE, PLAYER, FX } from './config.js';
+import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS, TILE, TRAFFIC_MIX, VEHICLE, PLAYER, FX, ECONOMY } from './config.js';
 import { input } from './input.js';
 import { makeRng, rngWeighted, dist } from './utils.js';
 import { Camera } from './camera.js';
@@ -14,10 +14,12 @@ import { CityMap } from './world/citymap.js';
 import { Player } from './entities/player.js';
 import { Vehicle } from './entities/vehicle.js';
 import { Pedestrian } from './entities/pedestrian.js';
+import { Pickup } from './entities/pickup.js';
 import { Fx } from './systems/fx.js';
 import { SpatialHash, entityCollisionPass } from './systems/physics.js';
 import { fireHitscan } from './systems/combat.js';
 import { Spawner } from './systems/spawner.js';
+import { WantedSystem } from './systems/wanted.js';
 
 export class Game {
   constructor(canvas, viewport) {
@@ -34,6 +36,9 @@ export class Game {
     this.fx = new Fx();
     this.hash = new SpatialHash();
     this.spawner = new Spawner();
+    this.wanted = new WantedSystem();
+    this.money = 0;
+    this.maxCash = 0;
     this.explosionQueue = [];    // {v, delay} — chained blasts resolve over time
     this.time = 0;               // total simulated seconds
     this.tick = 0;
@@ -49,6 +54,8 @@ export class Game {
       menu: new MenuState(this),
       playing: new PlayingState(this),
       paused: new PausedState(this),
+      wasted: new EndedState(this, 'WASTED'),
+      busted: new EndedState(this, 'BUSTED'),
     };
     this.state = null;
     this.setState('menu');
@@ -70,9 +77,27 @@ export class Game {
     this.player = new Player(s.x, s.y);
     this.entities.push(this.player);
     this.#spawnParkedCars();
+    this.#spawnPickups();
+    this.wanted = new WantedSystem();
+    this.money = 0;
     this.camera.snapTo(this.player.x, this.player.y);
     this.time = 0;
     this.tick = 0;
+  }
+
+  #spawnPickups() {
+    const rng = makeRng(4242);
+    // street cash scattered on sidewalks (respawning)
+    let placed = 0, attempts = 200;
+    while (placed < 20 && attempts-- > 0) {
+      const t = this.map.sidewalks[Math.floor(rng() * this.map.sidewalks.length)];
+      this.entities.push(new Pickup((t.tx + 0.5) * TILE, (t.ty + 0.5) * TILE, 'cash',
+        { amount: 25, respawns: true }));
+      placed++;
+    }
+    // first-aid outside the hospital
+    const h = this.map.hospitalDoor;
+    this.entities.push(new Pickup(h.x + 40, h.y, 'health', { amount: 25, respawns: true }));
   }
 
   // Empty cars parked along the curb all over the city — always something to steal.
@@ -134,13 +159,15 @@ export class Game {
       onCarHitsPerson: (v, person, speed) => this.handleRunOver(ctx, v, person, speed),
       tick: this.tick,
       lodSkip: (e) => this.lodSkip(e),
-      wantedStars: () => 0, // replaced by the wanted system (m6)
-      // stubs fleshed out by later systems (wanted, economy)
-      reportCrime: (type, x, y) => {},
-      addMoney: (n, x, y) => {},
-      // placeholder respawn until the WASTED/BUSTED flow lands (m6)
-      onPlayerDeath: () => this.respawnPlayer(),
+      wantedStars: () => this.wanted.stars,
+      reportSighting: () => this.wanted.reportSighting(),
+      addMoney: (n, x, y) => this.addMoney(n, x, y),
+      onPlayerDeath: () => { if (this.stateName === 'playing') this.setState('wasted'); },
+      onPlayerBusted: () => { if (this.stateName === 'playing') this.setState('busted'); },
     };
+    ctx.reportCrime = (type, x, y) => this.wanted.reportCrime(type, x, y, ctx);
+    ctx.copShoot = (cop, ox, oy, angle, spreadScale) =>
+      fireHitscan(ctx, cop, ox, oy, angle, 'copPistol', spreadScale);
     ctx.shoot = (shooter, ox, oy, angle, weapon, spreadScale) =>
       fireHitscan(ctx, shooter, ox, oy, angle, weapon, spreadScale);
     // Jacking a driven car throws its driver onto the street in a panic.
@@ -196,14 +223,22 @@ export class Game {
   #explode(ctx, v) {
     this.resolvingExplosion = true;
     const x = v.x, y = v.y;
+    const byPlayer = v.lastHitByPlayer;
     v.becomeWreck();
     this.fx.explosion(x, y);
     this.renderer.addDecal({ x, y, kind: 'scorch', size: 34 });
+
+    if (byPlayer) {
+      const police = v.type === 'police';
+      this.addMoney(police ? ECONOMY.POLICE_CAR_DESTROY : ECONOMY.CAR_DESTROY, x, y - 12);
+      if (police) ctx.reportCrime('COP_KILL', x, y); // blowing up a cruiser is a heavy crime
+    }
+
     for (const e of [...this.entities]) {
       if (e === v || !e.alive) continue;
       const d = dist(x, y, e.x, e.y);
       if (d > VEHICLE.EXPLOSION_RADIUS + e.radius) continue;
-      if (e.kind === 'player' && e.driving) {
+      if (e.kind === 'player' && e.driving && e.vehicle !== v) {
         e.vehicle.takeDamage(VEHICLE.EXPLOSION_DMG, ctx, { kind: 'explosion' });
       } else {
         e.takeDamage(VEHICLE.EXPLOSION_DMG, ctx, { kind: 'explosion' });
@@ -263,6 +298,7 @@ export class Game {
 
     entityCollisionPass(this.hash, this.entities, world);
     this.processExplosions(world, dt);
+    this.wanted.update(dt, world);
     this.spawner.update(dt, world);
     this.fx.update(dt);
 
@@ -294,17 +330,27 @@ export class Game {
     this.tick++;
   }
 
-  respawnPlayer() {
+  addMoney(n, x, y) {
+    this.money = Math.max(0, this.money + n);
+    this.maxCash = Math.max(this.maxCash, this.money);
+    if (n > 0 && x !== undefined) this.fx.floatText(x, y, `+$${n}`, '#7fc95c');
+  }
+
+  respawnPlayer(door) {
     const p = this.player;
     if (p.vehicle) { p.vehicle.driver = null; p.vehicle = null; }
     p.alive = true;
     p.solid = true;
     p.hp = p.maxHp;
     p.knockdownTimer = 0;
+    p.enteringTimer = 0;
+    p.pendingVehicle = null;
+    p.exitRequested = false;
     p.invulnTimer = PLAYER.RESPAWN_INVULN_TIME;
-    const d = this.map.hospitalDoor;
+    const d = door || this.map.hospitalDoor;
     p.x = d.x; p.y = d.y;
     p.vx = 0; p.vy = 0;
+    this.wanted.clear();
     this.camera.snapTo(p.x, p.y);
   }
 
@@ -367,6 +413,59 @@ class PlayingState {
     this.game.simulate(dt);
   }
   renderOverlay(ctx) {}
+}
+
+// Shared death-cam state for WASTED (killed) and BUSTED (arrested): the world
+// keeps simulating for a couple of seconds, a penalty is applied, then the
+// player respawns at the hospital or police station.
+class EndedState {
+  constructor(game, label) { this.game = game; this.label = label; }
+  enter() {
+    this.timer = 2.2;
+    const g = this.game;
+    const busted = this.label === 'BUSTED';
+    const pct = busted ? ECONOMY.BUST_PENALTY_PCT : ECONOMY.DEATH_PENALTY_PCT;
+    const min = busted ? ECONOMY.BUST_PENALTY_MIN : ECONOMY.DEATH_PENALTY_MIN;
+    this.penalty = Math.min(g.money, Math.max(Math.round(g.money * pct), min));
+    g.money -= this.penalty;
+    if (busted) {
+      // weapons confiscated
+      g.player.ammo.pistol = 0;
+      g.player.ammo.smg = 0;
+      g.player.weapon = 'fist';
+      g.player.vx = 0; g.player.vy = 0;
+    }
+  }
+  exit() {}
+  update(dt) {
+    this.timer -= dt;
+    this.game.simulate(dt); // the city doesn't stop for you
+    if (this.timer <= 0 && (input.wasPressed('any') || this.timer < -2.5)) {
+      const door = this.label === 'BUSTED' ? this.game.map.policeDoor : this.game.map.hospitalDoor;
+      this.game.respawnPlayer(door);
+      this.game.setState('playing');
+    }
+  }
+  renderOverlay(ctx) {
+    ctx.fillStyle = 'rgba(8,8,10,0.5)';
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = this.label === 'BUSTED' ? '#7da7e0' : COLORS.danger;
+    ctx.font = '900 88px "Segoe UI", sans-serif';
+    ctx.fillText(this.label, VIEW_W / 2, VIEW_H / 2 - 10);
+    if (this.penalty > 0) {
+      ctx.fillStyle = COLORS.hudText;
+      ctx.font = '400 22px "Segoe UI", sans-serif';
+      ctx.fillText(`-$${this.penalty.toLocaleString('en-US')}${this.label === 'BUSTED' ? '  ·  weapons confiscated' : ''}`,
+        VIEW_W / 2, VIEW_H / 2 + 40);
+    }
+    if (this.timer <= 0) {
+      ctx.fillStyle = COLORS.hudDim;
+      ctx.font = '400 15px "Segoe UI", sans-serif';
+      ctx.fillText('Press any key', VIEW_W / 2, VIEW_H / 2 + 84);
+    }
+    ctx.textAlign = 'left';
+  }
 }
 
 class PausedState {
