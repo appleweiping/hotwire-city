@@ -111,15 +111,19 @@ export class SpatialHash {
 // (front + rear) so long cars collide believably without full OBB-vs-OBB SAT.
 
 const _query = [];
+// scratch circle pairs — the collision pass runs thousands of times per
+// second, so carCircles never allocates (pass `_circB` for the second car)
+const _circA = [{ x: 0, y: 0, r: 0 }, { x: 0, y: 0, r: 0 }];
+const _circB = [{ x: 0, y: 0, r: 0 }, { x: 0, y: 0, r: 0 }];
+export { _circB as carCirclesScratchB };
 
-export function carCircles(v) {
+export function carCircles(v, out = _circA) {
   const cos = Math.cos(v.angle), sin = Math.sin(v.angle);
   const off = v.spec.w / 4;
   const r = v.spec.h / 2 + 2;
-  return [
-    { x: v.x + cos * off, y: v.y + sin * off, r },
-    { x: v.x - cos * off, y: v.y - sin * off, r },
-  ];
+  out[0].x = v.x + cos * off; out[0].y = v.y + sin * off; out[0].r = r;
+  out[1].x = v.x - cos * off; out[1].y = v.y - sin * off; out[1].r = r;
+  return out;
 }
 
 export function entityCollisionPass(hash, entities, world) {
@@ -151,7 +155,7 @@ function collideVehicle(hash, v, world) {
 }
 
 function collideCarCar(a, b, world) {
-  const ca = carCircles(a), cb = carCircles(b);
+  const ca = carCircles(a), cb = carCircles(b, _circB);
   for (const p of ca) {
     for (const q of cb) {
       const dx = q.x - p.x, dy = q.y - p.y;

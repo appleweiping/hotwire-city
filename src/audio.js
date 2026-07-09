@@ -20,10 +20,11 @@ export class GameAudio {
 
   // Must be called from a user-gesture code path.
   unlock() {
-    if (this.ctx) return;
+    if (this.ctx) { this.ctx.resume(); return; }
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     this.ctx = new AC();
+    this.ctx.resume();
     this.master = this.ctx.createGain();
     this.master.gain.value = this.muted ? 0 : 0.5;
     this.master.connect(this.ctx.destination);
@@ -154,11 +155,15 @@ export class GameAudio {
   // Called every render frame with live game state.
   update(game) {
     if (!this.ctx) return;
+    if (this.ctx.state === 'suspended') this.ctx.resume();
     const t = this.ctx.currentTime;
+
+    // persistent voices are silent outside active play (pause, menus, death cam)
+    const active = game.stateName === 'playing';
 
     // engine follows the player's car
     const p = game.player;
-    const driving = p && p.driving && !p.vehicle.wrecked;
+    const driving = active && p && p.driving && p.vehicle && !p.vehicle.wrecked;
     const eg = this.engine.gain.gain;
     if (driving) {
       const speed = p.vehicle.speed();
@@ -171,7 +176,7 @@ export class GameAudio {
 
     // siren audible when any lit-up police car is near
     let sirenNear = false;
-    if (p) {
+    if (p && active) {
       for (const e of game.entities) {
         if (e.kind === 'vehicle' && e.sirenOn && !e.wrecked) {
           const dx = e.x - p.x, dy = e.y - p.y;

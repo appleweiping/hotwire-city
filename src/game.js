@@ -149,7 +149,17 @@ export class Game {
 
   // The world context handed to every entity/system update. Entities never
   // import game.js — everything they may touch is threaded through here.
+  // Built once and refreshed per tick (hot-path allocation matters).
   buildWorldContext() {
+    if (this.worldCtx) {
+      const c = this.worldCtx;
+      c.player = this.player;
+      c.time = this.time;
+      c.tick = this.tick;
+      c.events = this.eventsLastTick;
+      c.inputLocked = this.inputLocked || false;
+      return c;
+    }
     const ctx = {
       map: this.map,
       camera: this.camera,
@@ -176,7 +186,7 @@ export class Game {
       },
       onCarHitsPerson: (v, person, speed) => this.handleRunOver(ctx, v, person, speed),
       tick: this.tick,
-      lodSkip: (e) => this.lodSkip(e),
+      lodScale: (e) => this.lodScale(e),
       wantedStars: () => this.wanted.stars,
       reportSighting: () => this.wanted.reportSighting(),
       addMoney: (n, x, y) => this.addMoney(n, x, y),
@@ -186,13 +196,15 @@ export class Game {
     ctx.reportCrime = (type, x, y) => this.wanted.reportCrime(type, x, y, ctx);
     ctx.copShoot = (cop, ox, oy, angle, spreadScale) =>
       fireHitscan(ctx, cop, ox, oy, angle, 'copPistol', spreadScale);
+    ctx.inputLocked = false;
     ctx.shoot = (shooter, ox, oy, angle, weapon, spreadScale) =>
       fireHitscan(ctx, shooter, ox, oy, angle, weapon, spreadScale);
     // Jacking a driven car throws its driver onto the street in a panic.
     ctx.onCarJacked = (v, by) => {
       const wasAi = v.driver && v.driver.kind === 'ai';
+      const wasPolice = v.type === 'police';
       v.driver = null;
-      if (wasAi) {
+      if (wasAi && !wasPolice) {
         const sin = Math.sin(v.angle), cos = Math.cos(v.angle);
         const off = v.spec.h / 2 + 12;
         let px = v.x + sin * off, py = v.y - cos * off;      // far-side door
@@ -204,18 +216,20 @@ export class Game {
         this.entities.push(ped);
       }
       if (by && by.kind === 'player') {
-        ctx.reportCrime('CARJACK', v.x, v.y);
+        ctx.reportCrime(wasPolice ? 'COP_CAR_JACK' : 'CARJACK', v.x, v.y);
         ctx.addMoney(5, v.x, v.y);
       }
     };
+    this.worldCtx = ctx;
     return ctx;
   }
 
-  // Off-screen AI entities only think every 4th tick.
-  lodSkip(e) {
+  // Off-screen AI LOD: returns a dt multiplier — 1 on-screen, 0 on skipped
+  // off-screen ticks, 4 on the tick that runs (so timers stay wall-accurate).
+  lodScale(e) {
     const dx = Math.abs(e.x - this.camera.x), dy = Math.abs(e.y - this.camera.y);
-    if (dx < VIEW_W / 2 + 100 && dy < VIEW_H / 2 + 100) return false;
-    return (this.tick + e.id) % 4 !== 0;
+    if (dx < VIEW_W / 2 + 100 && dy < VIEW_H / 2 + 100) return 1;
+    return (this.tick + e.id) % 4 === 0 ? 4 : 0;
   }
 
   queueExplosion(v) {
@@ -257,11 +271,10 @@ export class Game {
       if (e === v || !e.alive) continue;
       const d = dist(x, y, e.x, e.y);
       if (d > VEHICLE.EXPLOSION_RADIUS + e.radius) continue;
-      if (e.kind === 'player' && e.driving && e.vehicle !== v) {
-        e.vehicle.takeDamage(VEHICLE.EXPLOSION_DMG, ctx, { kind: 'explosion' });
-      } else {
-        e.takeDamage(VEHICLE.EXPLOSION_DMG, ctx, { kind: 'explosion' });
-      }
+      // a driving player is protected by their car, and the car itself is
+      // damaged when iterated as an entity — never both (double-hit bug)
+      if (e.kind === 'player' && e.driving) continue;
+      e.takeDamage(VEHICLE.EXPLOSION_DMG, ctx, { kind: 'explosion' });
     }
     this.resolvingExplosion = false;
   }
@@ -410,6 +423,7 @@ export class Game {
 
   respawnPlayer(door) {
     const p = this.player;
+    this.inputLocked = false;
     if (p.vehicle) { p.vehicle.driver = null; p.vehicle = null; }
     p.alive = true;
     p.solid = true;
@@ -512,6 +526,9 @@ class EndedState {
   enter() {
     this.timer = 2.2;
     const g = this.game;
+    g.inputLocked = true;              // no running/shooting during the death cam
+    g.player.pendingVehicle = null;    // abort any half-finished car entry
+    g.player.enteringTimer = 0;
     const busted = this.label === 'BUSTED';
     const pct = busted ? ECONOMY.BUST_PENALTY_PCT : ECONOMY.DEATH_PENALTY_PCT;
     const min = busted ? ECONOMY.BUST_PENALTY_MIN : ECONOMY.DEATH_PENALTY_MIN;

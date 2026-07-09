@@ -44,14 +44,21 @@ class Input {
       }
     });
     window.addEventListener('keyup', (e) => this.held.delete(e.code));
-    window.addEventListener('blur', () => this.held.clear()); // alt-tab safety
+    window.addEventListener('blur', () => {
+      // alt-tab safety: no stuck movement keys or auto-fire
+      this.held.clear();
+      this.mouseDown = false;
+      this.mouseClicked = false;
+    });
 
     canvas.addEventListener('mousemove', (e) => {
       this.mouseClientX = e.clientX;
       this.mouseClientY = e.clientY;
     });
     canvas.addEventListener('mousedown', (e) => {
-      if (e.button === 0) { this.mouseDown = true; this.mouseClicked = true; this.anyPressed = true; }
+      // note: mouse does NOT set anyPressed — "press any key" means keyboard,
+      // so a held trigger can't unpause the game and instantly fire
+      if (e.button === 0) { this.mouseDown = true; this.mouseClicked = true; }
     });
     window.addEventListener('mouseup', (e) => {
       if (e.button === 0) this.mouseDown = false;

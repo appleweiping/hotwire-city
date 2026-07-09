@@ -49,13 +49,29 @@ function boot() {
   }
   requestAnimationFrame(trackMouse);
 
-  // Auto-pause when the tab goes to the background.
+  // Unlock audio from inside a genuine user-gesture call stack (Safari
+  // rejects AudioContexts created outside one).
+  const unlockAudio = () => {
+    game.audio.unlock();
+    window.removeEventListener('keydown', unlockAudio);
+    window.removeEventListener('mousedown', unlockAudio);
+  };
+  window.addEventListener('keydown', unlockAudio);
+  window.addEventListener('mousedown', unlockAudio);
+
+  // Auto-pause when the tab goes to the background; silence audio too.
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden && game.stateName === 'playing') game.setState('paused');
+    if (document.hidden) {
+      if (game.stateName === 'playing') game.setState('paused');
+      if (game.audio.ctx) game.audio.ctx.suspend();
+    } else if (game.audio.ctx) {
+      game.audio.ctx.resume();
+    }
   });
 
   game.start();
 
   // Expose for debugging / automated smoke tests (not part of the public API).
   window.__game = game;
+  window.__input = input;
 }

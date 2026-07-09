@@ -29,15 +29,19 @@ export class Renderer {
 
   // Permanent ground marks (blood, skids) are baked straight into the chunk
   // canvases — zero per-frame cost. A capped list replays them on rebake.
+  // A decal near a chunk seam is painted into every chunk it touches.
   addDecal(decal) {
     if (this.decals.length >= this.decalCap) this.decals.shift();
     this.decals.push(decal);
-    const canvas = this.chunks.get(this.#chunkKey(decal.x, decal.y));
-    if (canvas) this.#paintDecal(canvas.getContext('2d'), decal, true);
-  }
-
-  #chunkKey(wx, wy) {
-    return Math.floor(wx / CHUNK_PX) + ',' + Math.floor(wy / CHUNK_PX);
+    const s = (decal.size || 8) + 6;
+    const cx0 = Math.floor((decal.x - s) / CHUNK_PX), cx1 = Math.floor((decal.x + s) / CHUNK_PX);
+    const cy0 = Math.floor((decal.y - s) / CHUNK_PX), cy1 = Math.floor((decal.y + s) / CHUNK_PX);
+    for (let cy = cy0; cy <= cy1; cy++) {
+      for (let cx = cx0; cx <= cx1; cx++) {
+        const canvas = this.chunks.get(cx + ',' + cy);
+        if (canvas) this.#paintDecal(canvas.getContext('2d'), decal, { cx, cy });
+      }
+    }
   }
 
   render(game) {
@@ -99,7 +103,7 @@ export class Renderer {
   }
 
   #renderGround(ctx, cam) {
-    const view = cam.getVisibleRect();
+    const view = cam.getVisibleRect(16); // margin ≥ max screen shake (12px)
     const cx0 = Math.max(0, Math.floor(view.x / CHUNK_PX));
     const cy0 = Math.max(0, Math.floor(view.y / CHUNK_PX));
     const cx1 = Math.min(Math.ceil(MAP_W * TILE / CHUNK_PX) - 1, Math.floor((view.x + view.w) / CHUNK_PX));
@@ -159,9 +163,10 @@ export class Renderer {
       ctx.beginPath(); ctx.arc(t.x - t.r * 0.25, t.y - t.r * 0.25, t.r * 0.6, 0, Math.PI * 2); ctx.fill();
     }
 
-    // replay permanent decals that live in this chunk
+    // replay permanent decals overlapping this chunk (widened for seam decals)
     for (const d of this.decals) {
-      if (d.x >= px0 && d.x < px1 && d.y >= py0 && d.y < py1) this.#paintDecal(ctx, d);
+      const s = (d.size || 8) + 6;
+      if (d.x >= px0 - s && d.x < px1 + s && d.y >= py0 - s && d.y < py1 + s) this.#paintDecal(ctx, d);
     }
 
     return canvas;
@@ -318,13 +323,13 @@ export class Renderer {
     }
   }
 
-  // live=true paints onto an already-baked chunk (must set up its transform);
-  // live=false runs inside #bakeChunk where the transform is already applied.
-  #paintDecal(ctx, d, live = false) {
+  // live={cx,cy} paints onto an already-baked chunk (sets up that chunk's
+  // transform); live=null runs inside #bakeChunk with the transform applied.
+  #paintDecal(ctx, d, live = null) {
     ctx.save();
     if (live) {
-      const cx = Math.floor(d.x / CHUNK_PX), cy = Math.floor(d.y / CHUNK_PX);
-      ctx.setTransform(this.bakeScale, 0, 0, this.bakeScale, -cx * CHUNK_PX * this.bakeScale, -cy * CHUNK_PX * this.bakeScale);
+      ctx.setTransform(this.bakeScale, 0, 0, this.bakeScale,
+        -live.cx * CHUNK_PX * this.bakeScale, -live.cy * CHUNK_PX * this.bakeScale);
     }
     ctx.translate(d.x, d.y);
     ctx.rotate(d.angle || 0);

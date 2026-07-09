@@ -294,18 +294,30 @@ export class CityMap {
     return true; // overly long ray — treat as blocked
   }
 
-  // First building hit along a ray (for hitscan). Returns distance or Infinity.
+  // First building hit along a ray (for hitscan). Exact tile-DDA — same
+  // traversal as losBlocked, returning the distance to the tile entry face,
+  // so bullets can never slip through corners that block line of sight.
   raycastSolid(x0, y0, angle, maxDist) {
-    const step = TILE / 2;
-    const cos = Math.cos(angle), sin = Math.sin(angle);
-    for (let d = 0; d <= maxDist; d += step) {
-      if (this.isSolidAt(x0 + cos * d, y0 + sin * d)) {
-        // refine backwards for a tighter hit point
-        for (let dd = d - step; dd < d; dd += 4) {
-          if (this.isSolidAt(x0 + cos * dd, y0 + sin * dd)) return Math.max(0, dd);
-        }
-        return d;
-      }
+    const dx = Math.cos(angle), dy = Math.sin(angle);
+    let tx = Math.floor(x0 / TILE), ty = Math.floor(y0 / TILE);
+    if (this.tileType(tx, ty) === T.BUILDING) return 0; // started inside a wall
+
+    const stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1;
+    const tDeltaX = dx !== 0 ? Math.abs(TILE / dx) : Infinity;
+    const tDeltaY = dy !== 0 ? Math.abs(TILE / dy) : Infinity;
+    let tMaxX = dx !== 0
+      ? (dx > 0 ? (tx + 1) * TILE - x0 : x0 - tx * TILE) / Math.abs(dx)
+      : Infinity;
+    let tMaxY = dy !== 0
+      ? (dy > 0 ? (ty + 1) * TILE - y0 : y0 - ty * TILE) / Math.abs(dy)
+      : Infinity;
+
+    for (let guard = 0; guard < 256; guard++) {
+      let t;
+      if (tMaxX < tMaxY) { t = tMaxX; tMaxX += tDeltaX; tx += stepX; }
+      else { t = tMaxY; tMaxY += tDeltaY; ty += stepY; }
+      if (t > maxDist) return Infinity;
+      if (this.tileType(tx, ty) === T.BUILDING) return t;
     }
     return Infinity;
   }

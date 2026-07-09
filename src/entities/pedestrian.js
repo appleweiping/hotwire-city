@@ -38,7 +38,12 @@ export class Pedestrian extends Entity {
       return;
     }
 
-    if (world.lodSkip && world.lodSkip(this)) return;
+    if (world.lodScale) {
+      // off-screen: run every 4th tick with dt×4 so timers stay wall-accurate
+      const lod = world.lodScale(this);
+      if (lod === 0) return;
+      dt *= lod;
+    }
 
     this.#listen(world);
 

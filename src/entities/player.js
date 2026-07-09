@@ -52,6 +52,13 @@ export class Player extends Entity {
 
     if (this.driving) { this.#updateDriving(world); return; }
 
+    // death cam / cutscene: stand still, no interactions
+    if (world.inputLocked) {
+      this.vx = 0; this.vy = 0;
+      this.moving = false;
+      return;
+    }
+
     // --- on-foot movement ---
     const move = input.moveVector();
     const speed = input.isDown('sprint') ? PLAYER.SPRINT_SPEED : PLAYER.WALK_SPEED;
@@ -111,13 +118,16 @@ export class Player extends Entity {
     this.angle = v.angle;
 
     if (v.wrecked) { this.#tryExit(world) || this.#forceExit(world); return; }
+    if (world.inputLocked) { this.exitRequested = false; return; }
 
     if (input.wasPressed('interact')) {
-      if (Math.abs(v.fwdSpeed()) <= VEHICLE.EXIT_MAX_SPEED) this.#tryExit(world);
+      if (this.exitRequested) this.exitRequested = false;           // second E cancels
+      else if (Math.abs(v.fwdSpeed()) <= VEHICLE.EXIT_MAX_SPEED) this.#tryExit(world);
       else this.exitRequested = true; // vehicle auto-brakes while this is set
     }
     if (this.exitRequested && Math.abs(v.fwdSpeed()) <= VEHICLE.EXIT_MAX_SPEED) {
-      this.#tryExit(world);
+      // boxed in? release the latch so the player regains the wheel
+      if (!this.#tryExit(world)) this.exitRequested = false;
     }
   }
 
@@ -145,7 +155,11 @@ export class Player extends Entity {
   #finishEntering(world) {
     const v = this.pendingVehicle;
     this.pendingVehicle = null;
-    if (!v || v.wrecked) { this.solid = true; return; }
+    // re-validate: the car may have wrecked, sped up, or driven away mid-animation
+    const stillThere = v && !v.wrecked
+      && dist(this.x, this.y, v.x, v.y) <= VEHICLE.ENTER_DIST + v.radius
+      && (!v.driver || v.driver === this || v.speed() <= VEHICLE.JACK_MAX_SPEED);
+    if (!stillThere) { this.solid = true; return; }
     if (v.driver && v.driver !== this) {
       world.onCarJacked && world.onCarJacked(v, this); // ejects driver, reports crime
     }
@@ -194,10 +208,20 @@ export class Player extends Entity {
     return true;
   }
 
-  // Last resort when the car is destroyed and every exit is blocked.
+  // Last resort when the car is destroyed and every standard exit is blocked:
+  // spiral outward until a safe spot is found (never into a wall or the river).
   #forceExit(world) {
     const v = this.vehicle;
-    this.x = v.x; this.y = v.y - v.spec.h / 2 - 14;
+    let px = v.x, py = v.y - v.spec.h / 2 - 14; // default if the scan fails
+    outer:
+    for (let r = 20; r <= 140; r += 24) {
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const cx = v.x + Math.cos(a) * r, cy = v.y + Math.sin(a) * r;
+        if (this.#spotFree(world, cx, cy)) { px = cx; py = cy; break outer; }
+      }
+    }
+    this.x = px; this.y = py;
     this.vx = 0; this.vy = 0;
     v.driver = null;
     this.vehicle = null;

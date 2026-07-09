@@ -1,7 +1,7 @@
 // police.js — the brain driving police cars: predictive pursuit, ramming at
 // 3★+, and pulling over to deploy foot cops when the player is on foot.
 
-import { COP, TRAFFIC } from '../config.js';
+import { COP, TRAFFIC, WANTED } from '../config.js';
 import { clamp, angleDiff, dist } from '../utils.js';
 import { Cop } from '../entities/cop.js';
 
@@ -27,6 +27,17 @@ export class PoliceBrain {
       return;
     }
 
+    // Cruisers count as eyes on the player too — without this, heat decays
+    // mid-pursuit whenever no foot cop is close enough (throttled raycast).
+    this.sightTimer = (this.sightTimer || 0) - dt;
+    if (this.sightTimer <= 0) {
+      this.sightTimer = 0.25;
+      const dd = dist(v.x, v.y, p.x, p.y);
+      if (dd < 550 && p.alive && !world.map.losBlocked(v.x, v.y, p.x, p.y)) {
+        world.reportSighting && world.reportSighting();
+      }
+    }
+
     if (this.reverseTime > 0) {
       this.reverseTime -= dt;
       v.controls.throttle = -1;
@@ -45,7 +56,9 @@ export class PoliceBrain {
         if (!this.deployed && v.fwdSpeed() < 25) this.#deployCops(v, world);
         return;
       }
-      this.deployed = false; // player broke away — rearm the deployment
+      // rearm only after the player truly breaks away (hysteresis, not a
+      // 150px boundary oscillation that would leak cops every pass)
+      if (d > 450) this.deployed = false;
     }
 
     // predictive pursuit point
@@ -77,6 +90,13 @@ export class PoliceBrain {
 
   #deployCops(v, world) {
     this.deployed = true;
+    // deployments must respect the wanted roster (with slack), or car
+    // shuttling would inflate the foot-cop population without limit
+    const stars = world.wantedStars();
+    const wantFoot = WANTED.ROSTER[stars] ? WANTED.ROSTER[stars][0] : 2;
+    let foot = 0;
+    for (const e of world.entities) if (e.kind === 'cop' && e.alive) foot++;
+    if (foot >= wantFoot + 2) return;
     const sin = Math.sin(v.angle), cos = Math.cos(v.angle);
     const off = v.spec.h / 2 + 10;
     for (const side of [1, -1]) {

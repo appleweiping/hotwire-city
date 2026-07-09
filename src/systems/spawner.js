@@ -27,7 +27,8 @@ export class Spawner {
     let peds = 0, cars = 0;
     for (const e of world.entities) {
       if (e.kind === 'pedestrian' && e.alive) peds++;
-      else if (e.kind === 'vehicle' && e.driver && e.driver.kind === 'ai') cars++;
+      // police cruisers belong to the wanted roster, not the traffic budget
+      else if (e.kind === 'vehicle' && e.driver && e.driver.kind === 'ai' && !e.driver.police) cars++;
     }
 
     // high wanted levels trim the ped budget first (global entity budget)
@@ -39,12 +40,18 @@ export class Spawner {
   }
 
   #recycle(world, p) {
+    const stars = world.wantedStars ? world.wantedStars() : 0;
     for (const e of world.entities) {
       if (e.kind === 'pedestrian') {
         if (dist(e.x, e.y, p.x, p.y) > PED.DESPAWN_DIST) e.remove = true;
+      } else if (e.kind === 'cop') {
+        // stranded patrol cops recycle like pedestrians; pursuers never do
+        if (e.state === 'patrol' && dist(e.x, e.y, p.x, p.y) > PED.DESPAWN_DIST) e.remove = true;
       } else if (e.kind === 'vehicle' && !e.persistent && e !== p.vehicle) {
-        // AI traffic and abandoned (jacked) cars recycle far away; the 45
-        // seeded parked cars are permanent world furniture
+        // pursuing police cars are exempt — the wanted system owns their
+        // cleanup; everything else recycles far away (seeded parked cars
+        // are permanent world furniture)
+        if (e.driver && e.driver.police && stars > 0) continue;
         if (dist(e.x, e.y, p.x, p.y) > TRAFFIC.DESPAWN_DIST) e.remove = true;
       }
     }

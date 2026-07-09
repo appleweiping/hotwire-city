@@ -14,7 +14,7 @@ export class Hud {
     this.map = map;
     this.base = this.#bakeMinimapBase(map);
     this.prevStars = 0;
-    this.starPop = 0;            // pop animation timer on star gain
+    this.popUntil = 0;           // wall-clock end of the star pop animation
     this.cashShown = null;       // cached formatted string
     this.cashText = '$0';
   }
@@ -88,17 +88,20 @@ export class Hud {
 
   #stars(ctx, game) {
     const stars = game.wanted.stars;
-    if (stars > this.prevStars) this.starPop = 0.3;
+    const now = performance.now();
+    if (stars > this.prevStars) this.popUntil = now + 300;
     this.prevStars = stars;
-    if (this.starPop > 0) this.starPop -= 1 / 60;
+    // wall-clock animation — render-frame decrements would run 2-4× fast on
+    // high-refresh displays
+    const popT = Math.max(0, this.popUntil - now) / 1000;
 
-    const decayBlink = game.wanted.isDecaying() && Math.floor(performance.now() / 250) % 2 === 0;
+    const decayBlink = game.wanted.isDecaying() && Math.floor(now / 250) % 2 === 0;
     const size = 17;
     for (let i = 0; i < 5; i++) {
       const filled = i < stars;
       const x = VIEW_W - 24 - (4 - i) * (size + 8) - size / 2;
       const y = 34;
-      const pop = filled && i === stars - 1 && this.starPop > 0 ? 1 + this.starPop * 1.6 : 1;
+      const pop = filled && i === stars - 1 && popT > 0 ? 1 + popT * 1.6 : 1;
       ctx.save();
       ctx.translate(x, y);
       ctx.scale(pop, pop);

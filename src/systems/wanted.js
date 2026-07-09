@@ -97,10 +97,16 @@ export class WantedSystem {
     this.reinforceTimer = this.stars >= 4 ? WANTED.REINFORCE_INTERVAL_HIGH : WANTED.REINFORCE_INTERVAL;
 
     const [wantFoot, wantCars] = WANTED.ROSTER[this.stars];
+    // count only units near enough to matter — a cop stranded across the map
+    // must not starve reinforcements forever
+    const p0 = world.player;
     let foot = 0, cars = 0;
     for (const e of world.entities) {
-      if (e.kind === 'cop' && e.alive) foot++;
-      else if (e.kind === 'vehicle' && e.driver && e.driver.police && !e.wrecked) cars++;
+      if (e.kind === 'cop' && e.alive) {
+        if (dist(e.x, e.y, p0.x, p0.y) < 1300) foot++;
+      } else if (e.kind === 'vehicle' && e.driver && e.driver.police && !e.wrecked) {
+        if (dist(e.x, e.y, p0.x, p0.y) < 1600) cars++;
+      }
     }
 
     const p = world.player;
@@ -192,17 +198,19 @@ export class WantedSystem {
     }
   }
 
-  // Heat gone: pursuing units melt away once off-screen.
+  // Heat gone: pursuing units melt away once off-screen. Also covers
+  // driverless police cars (roadblocks, deployed cruisers).
   #standDown(world) {
     for (const e of world.entities) {
       if (e.kind === 'cop' && e.alive && e.state !== 'patrol') {
         if (dist(e.x, e.y, world.player.x, world.player.y) > 800) e.remove = true;
         else { e.state = 'patrol'; e.walkTarget = null; }
-      } else if (e.kind === 'vehicle' && e.driver && e.driver.police) {
+      } else if (e.kind === 'vehicle' && e.type === 'police' && !e.wrecked && e !== world.player.vehicle) {
         e.sirenOn = false;
         if (dist(e.x, e.y, world.player.x, world.player.y) > 900) e.remove = true;
       }
     }
+    this.activeRoadblocks.length = 0;
   }
 
   clear() {

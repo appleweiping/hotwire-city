@@ -53,7 +53,11 @@ export class Cop extends Entity {
     }
 
     if (this.state === 'patrol') {
-      if (world.lodSkip && world.lodSkip(this)) return;
+      if (world.lodScale) {
+        const lod = world.lodScale(this);
+        if (lod === 0) return;
+        dt *= lod;
+      }
       this.#patrol(dt, world);
       if (stars >= 1) this.#lookForPlayer(dt, world, stars);
       return;
@@ -133,8 +137,9 @@ export class Cop extends Entity {
       this.arrestTimer = COP.ARREST_TIME;
       return;
     }
-    // gunfight range at 2★+
-    if (stars >= 2 && this.canSee && d < COP.SHOOT_RANGE_MAX && d > COP.ARREST_DIST * 2) {
+    // gunfight range at 2★+ (never against a driving player — #shoot would
+    // bounce straight back to chase and the two states would livelock)
+    if (stars >= 2 && this.canSee && !p.driving && d < COP.SHOOT_RANGE_MAX && d > COP.ARREST_DIST * 2) {
       this.state = 'shoot';
       return;
     }

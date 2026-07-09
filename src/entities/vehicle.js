@@ -46,18 +46,26 @@ export class Vehicle extends Entity {
 
     // Driver input: the player reads the keyboard; AI writes this.controls.
     if (this.driver && this.driver.kind === 'player') {
-      if (this.driver.exitRequested) {
-        // committed to exiting: auto-brake to walking-out speed
+      if (this.driver.exitRequested || world.inputLocked) {
+        // committed to exiting (or death cam): auto-brake to a stop
         this.controls.throttle = -1;
         this.controls.steer = 0;
         this.controls.handbrake = false;
+        if (Math.abs(this.fwdSpeed()) < 12) this.controls.throttle = 0; // don't creep into reverse
       } else {
         this.controls.throttle = (input.isDown('up') ? 1 : 0) + (input.isDown('down') ? -1 : 0);
         this.controls.steer = (input.isDown('right') ? 1 : 0) + (input.isDown('left') ? -1 : 0);
         this.controls.handbrake = input.isDown('handbrake');
       }
     } else if (this.driver && this.driver.kind === 'ai') {
-      if (world.lodSkip && world.lodSkip(this)) return; // off-screen traffic thinks less
+      // off-screen traffic thinks less — but pursuing police cars never do,
+      // or they'd fall behind at quarter speed the moment they leave the view
+      const pursuing = this.driver.police && world.wantedStars() > 0;
+      if (!pursuing && world.lodScale) {
+        const lod = world.lodScale(this);
+        if (lod === 0) return;
+        dt *= lod;
+      }
       this.driver.drive(this, dt, world);
     } else if (!this.driver) {
       // parked / abandoned: roll to a stop
@@ -127,8 +135,10 @@ export class Vehicle extends Entity {
     this.x += this.vx * dt;
     this.y += this.vy * dt;
 
-    // heavy drift leaves skid marks
-    if (Math.abs(lat) > 60 && world.addDecal) {
+    // heavy drift leaves skid marks (throttled — 60/s would flush the decal list)
+    this.skidTimer = (this.skidTimer || 0) - dt;
+    if (Math.abs(lat) > 60 && world.addDecal && this.skidTimer <= 0) {
+      this.skidTimer = 0.06;
       world.addDecal({ x: this.x - nCos * 10, y: this.y - nSin * 10, kind: 'skid', angle: this.angle, size: 8 });
     }
   }
@@ -200,8 +210,10 @@ export class Vehicle extends Entity {
   }
 
   die(world, source) {
-    // hp exhausted → explode now, even if the fire fuse was still burning
+    // hp exhausted → dead immediately (no more driving a 0-hp car), and the
+    // explosion resolves through the world's delayed queue
     if (this.wrecked) return;
+    this.alive = false;
     if (world && world.explodeVehicle) world.explodeVehicle(this, source);
     else this.becomeWreck();
   }
@@ -297,10 +309,13 @@ export class Vehicle extends Entity {
   }
 }
 
-// Local-space sample points on the OBB boundary: corners + edge midpoints
+// Local-space sample points on the OBB boundary: corners, edge midpoints,
+// plus quarter points along the long sides — a 56px truck side sampled only
+// at 28px intervals could straddle a 32px tile corner undetected.
 const SAMPLE_POINTS = [
   [-1, -1], [1, -1], [1, 1], [-1, 1],   // corners
   [1, 0], [-1, 0], [0, -1], [0, 1],     // edge midpoints
+  [0.5, -1], [0.5, 1], [-0.5, -1], [-0.5, 1], // long-edge quarter points
 ];
 
 const CIVILIAN_COLORS = ['#b8433a', '#3a6db8', '#c2b23c', '#5a9648', '#8956b0', '#c07838', '#4aa8a0', '#94989e', '#d6d2c8', '#41454c'];
