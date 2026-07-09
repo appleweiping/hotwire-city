@@ -24,6 +24,7 @@ export class Player extends Entity {
     this.weapon = 'fist';
     this.ammo = { pistol: WEAPONS.pistol.ammo, smg: WEAPONS.smg.ammo };
     this.shootCooldown = 0;
+    this.damageFlash = 0;
     this.moving = false;
   }
 
@@ -32,6 +33,7 @@ export class Player extends Entity {
   update(dt, world) {
     if (this.invulnTimer > 0) this.invulnTimer -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
+    if (this.damageFlash > 0) this.damageFlash -= dt;
 
     // mid enter-animation: frozen and out of the collision world
     if (this.enteringTimer > 0) {
@@ -66,6 +68,37 @@ export class Player extends Entity {
     this.nearbyVehicle = this.#findNearestVehicle(world);
     if (this.nearbyVehicle && input.wasPressed('interact')) {
       this.#beginEntering(world, this.nearbyVehicle);
+      return;
+    }
+
+    this.#updateWeapons(world);
+
+    // rivers are not for swimming
+    if (world.map.isWaterAt(this.x, this.y)) {
+      this.invulnTimer = 0;
+      this.takeDamage(9999, world, { kind: 'drown' });
+    }
+  }
+
+  #updateWeapons(world) {
+    if (input.wasPressed('weapon1')) this.selectWeapon('fist');
+    if (input.wasPressed('weapon2')) this.selectWeapon('pistol');
+    if (input.wasPressed('weapon3')) this.selectWeapon('smg');
+    if (input.wasPressed('cycleWeapon')) this.cycleWeapon();
+
+    const w = WEAPONS[this.weapon];
+    const wantFire = w.auto ? input.mouseDown : input.mouseClicked;
+    if (!wantFire || this.shootCooldown > 0) return;
+    if (!w.melee && this.ammo[this.weapon] <= 0) return;
+
+    this.shootCooldown = 1 / w.rate;
+    const ox = this.x + Math.cos(this.angle) * (this.radius + 4);
+    const oy = this.y + Math.sin(this.angle) * (this.radius + 4);
+    world.shoot(this, ox, oy, this.angle, this.weapon, this.moving ? 1.8 : 1);
+    if (!w.melee) {
+      this.ammo[this.weapon]--;
+      world.fx.addTrauma(0.06);
+      world.reportCrime('GUNSHOT', this.x, this.y);
     }
   }
 
@@ -225,5 +258,16 @@ export class Player extends Entity {
 
   heal(amount) {
     this.hp = clamp(this.hp + amount, 0, this.maxHp);
+  }
+
+  takeDamage(amount, world, source) {
+    if (!this.alive || this.invulnTimer > 0) return;
+    this.damageFlash = 0.3; // HUD red vignette reads this
+    super.takeDamage(amount, world, source);
+  }
+
+  die(world, source) {
+    super.die(world, source);
+    if (world && world.onPlayerDeath) world.onPlayerDeath(source);
   }
 }

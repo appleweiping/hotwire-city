@@ -65,6 +65,24 @@ export class Vehicle extends Entity {
 
     this.#integrate(dt, world);
     this.#collideTiles(world);
+    this.#damageEffects(dt, world);
+  }
+
+  // grey smoke below 60% hp, black smoke + flames + fuse below 30%
+  #damageEffects(dt, world) {
+    const frac = this.hp / this.maxHp;
+    if (frac <= VEHICLE.FIRE_HP && this.fireFuse < 0 && this.alive) {
+      this.fireFuse = VEHICLE.FIRE_FUSE;
+    }
+    if (frac > VEHICLE.SMOKE_HP || !world.fx) return;
+    this.smokeTimer = (this.smokeTimer || 0) - dt;
+    if (this.smokeTimer > 0) return;
+    this.smokeTimer = 0.15;
+    const cos = Math.cos(this.angle), sin = Math.sin(this.angle);
+    const ex = this.x + cos * this.spec.w * 0.3;
+    const ey = this.y + sin * this.spec.w * 0.3;
+    world.fx.smoke(ex, ey, frac <= VEHICLE.FIRE_HP);
+    if (this.fireFuse >= 0) world.fx.fire(ex, ey);
   }
 
   #integrate(dt, world) {
@@ -166,10 +184,10 @@ export class Vehicle extends Entity {
   }
 
   die(world, source) {
-    // becomes a burning car → explosion is handled by the world (milestone 4+)
-    if (!this.wrecked && this.fireFuse < 0) {
-      world && world.explodeVehicle ? world.explodeVehicle(this, source) : this.becomeWreck();
-    }
+    // hp exhausted → explode now, even if the fire fuse was still burning
+    if (this.wrecked) return;
+    if (world && world.explodeVehicle) world.explodeVehicle(this, source);
+    else this.becomeWreck();
   }
 
   becomeWreck() {

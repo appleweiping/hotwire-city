@@ -5,14 +5,17 @@
 //   input → physics → collision → damage/crime → queue events →
 //   AI consumes last tick's events → spawn/recycle → render
 
-import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS, TILE, TRAFFIC_MIX } from './config.js';
+import { STEP, MAX_FRAME_DELTA, VIEW_W, VIEW_H, COLORS, TILE, TRAFFIC_MIX, VEHICLE, PLAYER, FX } from './config.js';
 import { input } from './input.js';
-import { makeRng, rngWeighted } from './utils.js';
+import { makeRng, rngWeighted, dist } from './utils.js';
 import { Camera } from './camera.js';
 import { Renderer } from './renderer.js';
 import { CityMap } from './world/citymap.js';
 import { Player } from './entities/player.js';
 import { Vehicle } from './entities/vehicle.js';
+import { Fx } from './systems/fx.js';
+import { SpatialHash, entityCollisionPass } from './systems/physics.js';
+import { fireHitscan } from './systems/combat.js';
 
 export class Game {
   constructor(canvas, viewport) {
@@ -26,6 +29,9 @@ export class Game {
 
     this.entities = [];
     this.player = null;
+    this.fx = new Fx();
+    this.hash = new SpatialHash();
+    this.explosionQueue = [];    // {v, delay} — chained blasts resolve over time
     this.time = 0;               // total simulated seconds
     this.tick = 0;
 
@@ -102,7 +108,7 @@ export class Game {
   // The world context handed to every entity/system update. Entities never
   // import game.js — everything they may touch is threaded through here.
   buildWorldContext() {
-    return {
+    const ctx = {
       map: this.map,
       camera: this.camera,
       player: this.player,
@@ -113,11 +119,79 @@ export class Game {
       emit: (evt) => this.eventsThisTick.push(evt),
       addEntity: (e) => this.entities.push(e),
       addDecal: (d) => this.renderer.addDecal(d),
-      // stubs fleshed out by later systems (combat, wanted, spawner)
+      fx: this.fx,
+      queryCircle: (x, y, r, out) => this.hash.queryCircle(x, y, r, out),
+      explodeVehicle: (v) => this.queueExplosion(v),
+      onCarCrash: (v, impact) => {
+        if (this.player && this.player.vehicle === v) {
+          this.fx.addTrauma(FX.TRAUMA_CRASH * Math.min(1, impact / 250));
+        }
+      },
+      onCarHitsPerson: (v, person, speed) => this.handleRunOver(ctx, v, person, speed),
+      // stubs fleshed out by later systems (wanted, spawner, economy)
       onCarJacked: (v, by) => { v.driver = null; },
-      onCarCrash: (v, impact) => {},
-      explodeVehicle: (v, source) => { v.becomeWreck(); },
+      reportCrime: (type, x, y) => {},
+      addMoney: (n, x, y) => {},
+      // placeholder respawn until the WASTED/BUSTED flow lands (m6)
+      onPlayerDeath: () => this.respawnPlayer(),
     };
+    ctx.shoot = (shooter, ox, oy, angle, weapon, spreadScale) =>
+      fireHitscan(ctx, shooter, ox, oy, angle, weapon, spreadScale);
+    return ctx;
+  }
+
+  queueExplosion(v) {
+    if (v.wrecked || this.explosionQueue.some(q => q.v === v)) return;
+    // chained blasts (triggered while another explosion resolves) are delayed
+    const delay = this.resolvingExplosion ? VEHICLE.CHAIN_EXPLOSION_DELAY : 0;
+    this.explosionQueue.push({ v, delay });
+  }
+
+  processExplosions(ctx, dt) {
+    let resolved = 0;
+    for (let i = this.explosionQueue.length - 1; i >= 0; i--) {
+      const q = this.explosionQueue[i];
+      q.delay -= dt;
+      if (q.delay > 0 || resolved >= VEHICLE.MAX_EXPLOSIONS_PER_TICK) continue;
+      this.explosionQueue.splice(i, 1);
+      if (q.v.wrecked) continue;
+      resolved++;
+      this.#explode(ctx, q.v);
+    }
+  }
+
+  #explode(ctx, v) {
+    this.resolvingExplosion = true;
+    const x = v.x, y = v.y;
+    v.becomeWreck();
+    this.fx.explosion(x, y);
+    this.renderer.addDecal({ x, y, kind: 'scorch', size: 34 });
+    for (const e of [...this.entities]) {
+      if (e === v || !e.alive) continue;
+      const d = dist(x, y, e.x, e.y);
+      if (d > VEHICLE.EXPLOSION_RADIUS + e.radius) continue;
+      if (e.kind === 'player' && e.driving) {
+        e.vehicle.takeDamage(VEHICLE.EXPLOSION_DMG, ctx, { kind: 'explosion' });
+      } else {
+        e.takeDamage(VEHICLE.EXPLOSION_DMG, ctx, { kind: 'explosion' });
+      }
+    }
+    this.resolvingExplosion = false;
+  }
+
+  // A car met a person. The person-side reaction depends on who they are.
+  handleRunOver(ctx, v, person, speed) {
+    if (person.kind === 'player') {
+      if (speed >= PLAYER.CAR_HIT_MIN_SPEED && person.invulnTimer <= 0 && person.knockdownTimer <= 0) {
+        person.takeDamage((speed - PLAYER.CAR_HIT_MIN_SPEED) * PLAYER.CAR_HIT_DMG_SCALE, ctx, { kind: 'runover', by: v });
+        person.knockdownTimer = PLAYER.KNOCKDOWN_TIME;
+        person.invulnTimer = PLAYER.HIT_INVULN_TIME;
+        this.fx.blood(person.x, person.y, Math.atan2(person.y - v.y, person.x - v.x));
+        this.fx.addTrauma(FX.TRAUMA_RUNOVER);
+      }
+    } else if (person.onRunOver) {
+      person.onRunOver(ctx, v, speed); // pedestrians (m5) and cops (m6)
+    }
   }
 
   start() {
@@ -154,6 +228,10 @@ export class Game {
       this.entities[i].update(dt, world);
     }
 
+    entityCollisionPass(this.hash, this.entities, world);
+    this.processExplosions(world, dt);
+    this.fx.update(dt);
+
     // swap-remove dead-and-expired entities (corpses linger via their own timers)
     for (let i = this.entities.length - 1; i >= 0; i--) {
       if (this.entities[i].remove) {
@@ -180,6 +258,28 @@ export class Game {
     this.camera.follow(this.player, dt, this.player.driving);
     this.time += dt;
     this.tick++;
+  }
+
+  respawnPlayer() {
+    const p = this.player;
+    if (p.vehicle) { p.vehicle.driver = null; p.vehicle = null; }
+    p.alive = true;
+    p.solid = true;
+    p.hp = p.maxHp;
+    p.knockdownTimer = 0;
+    p.invulnTimer = PLAYER.RESPAWN_INVULN_TIME;
+    const d = this.map.hospitalDoor;
+    p.x = d.x; p.y = d.y;
+    p.vx = 0; p.vy = 0;
+    this.camera.snapTo(p.x, p.y);
+  }
+
+  getShakeOffset() {
+    return this.fx.getShakeOffset();
+  }
+
+  renderWorldFx(ctx) {
+    this.fx.render(ctx);
   }
 }
 
