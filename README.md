@@ -1,99 +1,87 @@
-# HOTWIRE CITY
+# Hotwire City
 
-**A zero-dependency top-down open-city crime game inspired by classic GTA.**
-Steal cars, outrun the cops, keep the meter climbing.
+A top-down 2D car-theft and police-chase game for the browser, written in plain JavaScript and Canvas 2D.
 
-**[▶ Play it in your browser](https://appleweiping.github.io/hotwire-city/)** — no install, no build, desktop keyboard + mouse.
+**Play it: <https://appleweiping.github.io/hotwire-city/>** (desktop browser, keyboard and mouse)
 
-[中文说明 / Chinese README](README.zh-CN.md)
+![Stealing a car and running from the police](docs/screenshots/chase.gif)
 
-![Downtown chase](docs/screenshots/chase.png)
-
-## What is this?
-
-A love letter to the top-down era of Grand Theft Auto (GTA 1/2), built as an
-exercise in radical minimalism:
-
-- **Zero dependencies.** No engine, no framework, no npm, no build step.
-  Plain ES modules + Canvas 2D.
-- **Zero assets.** Every sprite is procedural vector drawing; every sound is
-  synthesized live with the Web Audio API. The repository contains no images
-  and no audio files.
-- **One deterministic city.** 92×92 tiles generated from a fixed seed —
-  every player walks the same streets.
-
-## The loop
-
-Wander a living city with pedestrians and traffic. Steal a car (`E`). Cause
-trouble. Watch the wanted stars climb — patrol cops, then cruisers, then
-rammers, then roadblocks. Break line of sight and lay low to shake the heat,
-or embrace it: **surviving at 3★+ pays $100 every 30 seconds**. Death costs
-30% of your cash, arrest costs 20% and your guns. There is no game over —
-your best run is the score.
-
-## Controls
-
-| Key | On foot | Driving |
-|---|---|---|
-| `W A S D` | Move (free angle) | Throttle / steer / brake–reverse |
-| Mouse | Aim (click to shoot) | — |
-| `Shift` | Sprint | — |
-| `Space` | — | Handbrake (drift!) |
-| `E` / `Enter` | Enter / steal car | Exit |
-| `1 / 2 / 3` or `Q` | Select / cycle weapon | — |
-| `M` | Mute | Mute |
-| `Esc` / `P` | Pause | Pause |
+This is the prototype I wrote before
+[Overdrive City](https://github.com/appleweiping/overdrive-city). I wanted to
+find out whether a small open-city game with traffic, pedestrians and a police
+response could work with no engine and no assets, so I built it top-down in
+Canvas 2D first. Overdrive City reuses the same ideas (tile-map city, one-
+parameter drift, heat-based wanted level) in 3D and adds generated jobs and a
+day/night cycle. If you want the fuller game, play that one; this one is
+smaller and quicker to read.
 
 ## Run it locally
-
-Browsers block ES modules on `file://`, so serve the folder with any static
-server:
 
 ```bash
 git clone https://github.com/appleweiping/hotwire-city.git
 cd hotwire-city
 python -m http.server 8000
-# open http://localhost:8000
+# open http://localhost:8000 and press any key
 ```
 
-Any static server works (`npx serve`, VS Code Live Server, …). There is
-nothing to install and nothing to build.
+Browsers block ES modules on `file://`, so it needs a static server. There is
+nothing to install and nothing to build. Phones get a notice instead of the
+game, because there are no touch controls.
 
-## How it works
+## Controls
 
-~4,000 lines of vanilla JavaScript. The interesting parts:
+| Key | On foot | Driving |
+|---|---|---|
+| `W` `A` `S` `D` | Move | Throttle, steer, brake and reverse |
+| Mouse | Aim, click to shoot | |
+| `Shift` | Sprint | |
+| `Space` | | Handbrake (drift) |
+| `E` or `Enter` | Get into or steal a car | Get out |
+| `1` `2` `3` or `Q` | Pick or cycle weapon | |
+| `M` | Mute | Mute |
+| `Esc` or `P` | Pause | Pause |
 
-- **Fixed 60 Hz timestep** with an accumulator — identical physics on a
-  144 Hz monitor and a struggling laptop.
-- **Fixed 1280×720 logical viewport**, letterbox-scaled to the window, so
-  every player sees exactly the same world (and spawn rings stay off-screen).
-- **The map is the spatial index**: tiles live in a `Uint8Array`; wall
-  collision, line-of-sight (tile DDA) and lane directions are all O(1) reads.
-- **Drift in one parameter**: car velocity splits into forward/lateral;
-  lateral decays as `exp(−grip·dt)`. The handbrake just lowers `grip`.
-- **Hitscan combat** — no bullet entities, just rays and one-frame tracers.
-- **Chunked ground cache**: the static city pre-renders into 512 px offscreen
-  canvases; blood and skid marks are painted permanently into those chunks
-  for zero per-frame cost.
-- **A heat-based wanted system** with a gain cap (40/s), LOS-gated decay and
-  pursuit units exempt from despawning — the cops you earned stay earned.
+## What happens
 
-Full mechanics and tuning tables: [docs/DESIGN.md](docs/DESIGN.md).
+You start on foot in a city full of pedestrians, traffic and parked cars.
+Steal a car, pick up street cash, and see how long you last. Crimes (shooting,
+carjacking, hitting people, attacking officers) raise your heat; stars appear
+at 10, 30, 60, 100 and 150 heat. Officers come on foot first, then in cars,
+which start ramming at three stars, and at five stars the police set up
+roadblocks ahead of you. Heat only drains after 8 seconds with no new crime
+and no officer able to see you.
 
-## Screenshots
+Dying shows **FLATLINED**, costs 30% of your cash and puts you outside the
+hospital; being arrested shows **CUFFED**, costs 20% plus your guns and puts
+you outside the police station. Surviving at three stars or more pays $100
+every 30 seconds. There is no game over: your best cash total is saved in the
+browser.
 
-| | |
+## How it's built
+
+- **Fixed 60 Hz simulation** (`src/game.js`) with an accumulator and a 250 ms frame cap, drawn into a fixed 1280×720 logical viewport that is letterboxed to the window, so everyone sees the same amount of city.
+- **The map is the spatial index.** `src/world/citymap.js` builds a 92 × 92 tile city (32 px tiles) from a fixed seed into a `Uint8Array`; wall collision, line of sight (a tile DDA walk) and lane directions are direct array reads. Moving entities use a spatial hash (`src/systems/physics.js`).
+- **Drift is one parameter.** Car velocity is split into forward and sideways parts and the sideways part decays as `exp(−grip·dt)`; the handbrake lowers `grip` (`src/entities/vehicle.js`).
+- **Static ground is cached.** The city is pre-rendered into 512 px offscreen canvases, and skid marks are painted into those chunks once instead of being redrawn every frame (`src/renderer.js`).
+- **Police AI reacts a tick late.** Events raised during a tick are only visible to AI on the next tick, so officers cannot react to a shot in the same frame it is fired; the wanted level caps heat gain at 40 per second (`src/systems/wanted.js`, `src/systems/police.js`).
+
+Every gameplay number lives in [`src/config.js`](src/config.js) and is
+explained in [docs/DESIGN.md](docs/DESIGN.md).
+
+| Title screen | Four stars downtown |
 |---|---|
-| ![Title](docs/screenshots/menu.png) | ![Wanted](docs/screenshots/wanted.png) |
+| ![Title screen](docs/screenshots/menu.png) | ![A four-star wanted level with officers closing in](docs/screenshots/wanted.png) |
 
-## Roadmap
+## Limitations
 
-- Touch controls (currently desktop-only; phones get a friendly notice)
-- Day/night cycle with headlights
-- Mission generator (deliveries, chases, hits)
-- Render interpolation for 120 Hz+ displays
+- Desktop only; no touch or gamepad support.
+- No missions or story: it is a sandbox with a cash score. The jobs live in Overdrive City.
+- Sprites are simple vector shapes and the sound is synthesized beeps and noise.
 
 ## License
 
-[MIT](LICENSE). Not affiliated with Rockstar Games or Take-Two Interactive;
-"GTA" is referenced only as genre inspiration.
+MIT, see [LICENSE](LICENSE). Inspired by the top-down crime games of the late
+1990s; it uses none of their code, art, names or audio and is not affiliated
+with any publisher.
+
+中文说明见 [README.zh-CN.md](README.zh-CN.md)。
