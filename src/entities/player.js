@@ -145,6 +145,7 @@ export class Player extends Entity {
     const occupied = v.driver && v.driver !== this;
     if (occupied && v.speed() > VEHICLE.JACK_MAX_SPEED) return; // can't jack at speed
     this.pendingVehicle = v;
+    if (occupied) v.heldForJack = true;  // its driver brakes while being pulled out
     this.enteringTimer = occupied ? VEHICLE.ENTER_TIME_JACK : VEHICLE.ENTER_TIME_EMPTY;
     this.solid = false;          // fully out of the collision world during the animation
     this.vx = 0; this.vy = 0;
@@ -155,6 +156,7 @@ export class Player extends Entity {
   #finishEntering(world) {
     const v = this.pendingVehicle;
     this.pendingVehicle = null;
+    if (v) v.heldForJack = false;
     // re-validate: the car may have wrecked, sped up, or driven away mid-animation
     const stillThere = v && !v.wrecked
       && dist(this.x, this.y, v.x, v.y) <= VEHICLE.ENTER_DIST + v.radius

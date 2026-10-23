@@ -20,6 +20,7 @@ export class TrafficBrain {
 
   drive(v, dt, world) {
     if (this.gaveUp) { v.controls.throttle = 0; return; }
+    if (v.heldForJack) { holdStill(v); return; }  // the player is pulling us out
 
     // stuck-recovery reverse maneuver
     if (this.reverseTime > 0) {
@@ -162,4 +163,12 @@ export class TrafficBrain {
     return TRAFFIC.CRUISE_SPEED * clamp(
       (nearest - TRAFFIC.STOP_DIST) / (TRAFFIC.PROBE_LEN - TRAFFIC.STOP_DIST), 0, 1);
   }
+}
+
+// Stand on the brakes while the player is dragging the driver out; without
+// this the car drives off mid-animation and the carjack silently fails.
+export function holdStill(v) {
+  v.controls.throttle = 0;
+  v.controls.steer = 0;
+  v.controls.handbrake = true;
 }

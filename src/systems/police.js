@@ -4,6 +4,7 @@
 import { COP, TRAFFIC, WANTED } from '../config.js';
 import { clamp, angleDiff, dist } from '../utils.js';
 import { Cop } from '../entities/cop.js';
+import { holdStill } from './traffic.js';
 
 const _probe = [];
 
@@ -20,6 +21,7 @@ export class PoliceBrain {
     const p = world.player;
     const stars = world.wantedStars();
     v.sirenOn = stars > 0;
+    if (v.heldForJack) { holdStill(v); return; }
 
     if (stars === 0) { // stand down: idle at the curb
       v.controls.throttle = 0;

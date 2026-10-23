@@ -527,6 +527,7 @@ class EndedState {
     this.timer = 2.2;
     const g = this.game;
     g.inputLocked = true;              // no running/shooting during the death cam
+    if (g.player.pendingVehicle) g.player.pendingVehicle.heldForJack = false;
     g.player.pendingVehicle = null;    // abort any half-finished car entry
     g.player.enteringTimer = 0;
     const arrested = this.arrested;
