@@ -1,25 +1,28 @@
-# HOTWIRE CITY — Design & Tuning Reference
+# Hotwire City design notes
 
-This document is the implementation-level design spec: every gameplay number,
-state machine, and the coupling rules that keep the systems honest. All values
-live in [`src/config.js`](../src/config.js) — this file explains *why*.
+These are my notes on how the game works: the gameplay numbers, the AI state
+machines, and the few ordering rules the systems depend on. The values
+themselves live in [`src/config.js`](../src/config.js); this file explains
+why they are what they are.
 
 Units: **pixels, seconds, radians**. Screen space is y-down; angle 0 = +x,
 clockwise positive. Simulation runs at a fixed **60 Hz** timestep driven by
 `requestAnimationFrame` with an accumulator (frame delta clamped to 250 ms so
-a background tab can't cause a spiral of death).
+a background tab can't cause a spiral of death). There is no interpolation
+between steps, since 60 Hz is close to the display rate; entities keep
+`prevX/prevY` so it could be added later.
 
 ---
 
 ## 1. City
 
-- Map: **92×92 tiles × 32 px = 2944×2944 px**. Why 92: the layout
-  `water(2) + ring road(4) + n × (block 8 + road 4) + water(2)` only closes
-  symmetrically when `8 + 12n = size` → n = 7.
+- Map: **92×92 tiles × 32 px = 2944×2944 px**. I first planned 96×96, but
+  the layout `water(2) + ring road(4) + n × (block 8 + road 4) + water(2)`
+  only closes symmetrically when `8 + 12n = size`, so n = 7 gives 92.
 - Tile types: `ROAD_H / ROAD_V / ROAD_CROSS / SIDEWALK / BUILDING / GRASS / WATER`.
   Only `BUILDING` is solid. `WATER` kills people instantly; **for cars it acts
-  as a guard rail** (deviation from the original spec's "car sinks" — instant
-  car destruction at the map edge punished exploration too hard).
+  as a guard rail**. My first version sank cars that drove into the water, but
+  losing the car at the map edge punished exploring too hard.
 - Road bands are 4 tiles wide, right-hand traffic, one lane each way. Lane
   centerlines sit ±32 px from the band center and are **derived from tile
   coordinates** (`CityMap.laneInfoAt`) — there is no separate road graph.
@@ -40,8 +43,9 @@ a background tab can't cause a spiral of death).
 | Hit by car | speed ≥ 80 → dmg `(v−80)×0.35`, knockdown 0.8 s, invuln 0.5 s |
 | Water | instant death |
 
-Aim is mouse-decoupled from movement (backpedal shooting works). While
-driving, weapons are disabled — the car *is* the weapon.
+Aim follows the mouse, separately from movement, so you can walk backwards
+while shooting. Weapons are disabled while driving; you can still run people
+over.
 
 ## 3. Vehicles
 
@@ -113,8 +117,8 @@ with a 2 s drop hysteresis (gains are instant).
 5★ in one frame. Decay (4/s) runs only after **8 s with no crime AND no
 police line-of-sight** — foot cops and cruisers both count as eyes
 (tile-DDA rays, throttled and staggered per unit).
-The HUD blinks the stars while decay is live — that's the "keep hiding, it's
-working" signal.
+The HUD blinks the stars while heat is draining, so you can tell that hiding
+is working.
 
 Response roster per star `[foot, cars]`: 1★ [2,0] · 2★ [3,1] · 3★ [4,3] ·
 4★ [6,4] · 5★ [8,6]; reinforcements every 4 s (3 s at 4★+), spawned in an
@@ -126,7 +130,8 @@ only when heat hits zero. At 5★, fleeing by car spawns crossing roadblocks
 Cop state machine: `PATROL → CHASE → SHOOT / ARREST → INVESTIGATE`. Arrest:
 within 24 px, player on foot and slower than 40 px/s, held 1.2 s. Shooting
 starts at 2★ (pistol 8 dmg @1.2/s, ±6° + ±6° vs moving targets; 4★+ fires
-at 4/s). Police cars pursue with 0.5 s velocity prediction, ram at 3★+, and
+at 4/s). Cop pistols reach 380 px, less than the player's 450: at full range
+it felt unfair in playtests to be shot by someone barely on screen. Police cars pursue with 0.5 s velocity prediction, ram at 3★+, and
 pull over to deploy two officers when the player is on foot.
 
 ## 7. Death & arrest (arcade rules)
@@ -157,10 +162,10 @@ Dead cops always drop ammo (pistol 20 / SMG 30, 50/50).
 
 Kill ped +10 · kill cop +50 · destroy car +40 · destroy police car +100 ·
 carjack +5 · street cash +25 (20 spots, respawn 60 s) ·
-**survival bonus +100 per 30 s alive at 3★+** — the core loop rewards
-staying in trouble, not avoiding it.
+**survival bonus +100 per 30 s alive at 3★+**, so staying wanted pays more
+than lying low.
 
-## 10. Juice
+## 10. Screen shake, particles and decals
 
 - Screen shake: trauma ∈ [0,1], amplitude = `trauma² × 12 px`, decay 1.5/s.
   Shake applies **only to the world layer** — never to the HUD, the minimap,
@@ -171,7 +176,9 @@ staying in trouble, not avoiding it.
   ground chunk canvases: zero per-frame cost, replayed from a 500-entry list
   when chunks rebake on resize.
 
-## 11. Coupling rules (the "don't break these" list)
+## 11. Ordering and collision rules
+
+Several systems quietly depend on these; changing one usually breaks another.
 
 1. Fixed update order: input → entity updates → collision pass → explosions →
    wanted → spawner → fx → event buffer rotation.
@@ -187,11 +194,3 @@ staying in trouble, not avoiding it.
    chasing cops converge because they're never recycled while heat > 0.
 7. The spatial hash is rebuilt from scratch every tick; cell size 128 px must
    stay ≥ the largest entity diameter (truck: 56 px) for 3×3 coverage.
-
-## 12. Known deviations from the original spec
-
-- Map is 92×92 (not 96×96) — see §1 for the arithmetic.
-- Water is a guard rail for cars instead of destroying them.
-- Cop pistol range 380 (not 450) — playtests felt unfair at full range.
-- No renderer interpolation between fixed steps (60 Hz ≈ display rate);
-  entities keep `prevX/prevY` fields so it can be added cheaply.
