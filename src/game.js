@@ -67,8 +67,8 @@ export class Game {
       menu: new MenuState(this),
       playing: new PlayingState(this),
       paused: new PausedState(this),
-      wasted: new EndedState(this, 'WASTED'),
-      busted: new EndedState(this, 'BUSTED'),
+      down: new EndedState(this, 'FLATLINED', false),
+      cuffed: new EndedState(this, 'CUFFED', true),
     };
     this.state = null;
     this.setState('menu');
@@ -190,8 +190,8 @@ export class Game {
       wantedStars: () => this.wanted.stars,
       reportSighting: () => this.wanted.reportSighting(),
       addMoney: (n, x, y) => this.addMoney(n, x, y),
-      onPlayerDeath: () => { if (this.stateName === 'playing') this.setState('wasted'); },
-      onPlayerBusted: () => { if (this.stateName === 'playing') this.setState('busted'); },
+      onPlayerDeath: () => { if (this.stateName === 'playing') this.setState('down'); },
+      onPlayerArrested: () => { if (this.stateName === 'playing') this.setState('cuffed'); },
     };
     ctx.reportCrime = (type, x, y) => this.wanted.reportCrime(type, x, y, ctx);
     ctx.copShoot = (cop, ox, oy, angle, spreadScale) =>
@@ -518,23 +518,23 @@ class PlayingState {
   renderOverlay(ctx) {}
 }
 
-// Shared death-cam state for WASTED (killed) and BUSTED (arrested): the world
-// keeps simulating for a couple of seconds, a penalty is applied, then the
-// player respawns at the hospital or police station.
+// Shared death-cam state for FLATLINED (killed) and CUFFED (arrested): the
+// world keeps simulating for a couple of seconds, a penalty is applied, then
+// the player respawns at the hospital or police station.
 class EndedState {
-  constructor(game, label) { this.game = game; this.label = label; }
+  constructor(game, label, arrested) { this.game = game; this.label = label; this.arrested = arrested; }
   enter() {
     this.timer = 2.2;
     const g = this.game;
     g.inputLocked = true;              // no running/shooting during the death cam
     g.player.pendingVehicle = null;    // abort any half-finished car entry
     g.player.enteringTimer = 0;
-    const busted = this.label === 'BUSTED';
-    const pct = busted ? ECONOMY.BUST_PENALTY_PCT : ECONOMY.DEATH_PENALTY_PCT;
-    const min = busted ? ECONOMY.BUST_PENALTY_MIN : ECONOMY.DEATH_PENALTY_MIN;
+    const arrested = this.arrested;
+    const pct = arrested ? ECONOMY.BUST_PENALTY_PCT : ECONOMY.DEATH_PENALTY_PCT;
+    const min = arrested ? ECONOMY.BUST_PENALTY_MIN : ECONOMY.DEATH_PENALTY_MIN;
     this.penalty = Math.min(g.money, Math.max(Math.round(g.money * pct), min));
     g.money -= this.penalty;
-    if (busted) {
+    if (arrested) {
       // weapons confiscated
       g.player.ammo.pistol = 0;
       g.player.ammo.smg = 0;
@@ -547,7 +547,7 @@ class EndedState {
     this.timer -= dt;
     this.game.simulate(dt); // the city doesn't stop for you
     if (this.timer <= 0 && (input.wasPressed('any') || this.timer < -2.5)) {
-      const door = this.label === 'BUSTED' ? this.game.map.policeDoor : this.game.map.hospitalDoor;
+      const door = this.arrested ? this.game.map.policeDoor : this.game.map.hospitalDoor;
       this.game.respawnPlayer(door);
       this.game.showDeathHint();
       this.game.setState('playing');
@@ -557,13 +557,13 @@ class EndedState {
     ctx.fillStyle = 'rgba(8,8,10,0.5)';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     ctx.textAlign = 'center';
-    ctx.fillStyle = this.label === 'BUSTED' ? '#7da7e0' : COLORS.danger;
+    ctx.fillStyle = this.arrested ? '#7da7e0' : COLORS.danger;
     ctx.font = '900 88px "Segoe UI", sans-serif';
     ctx.fillText(this.label, VIEW_W / 2, VIEW_H / 2 - 10);
     if (this.penalty > 0) {
       ctx.fillStyle = COLORS.hudText;
       ctx.font = '400 22px "Segoe UI", sans-serif';
-      ctx.fillText(`-$${this.penalty.toLocaleString('en-US')}${this.label === 'BUSTED' ? '  ·  weapons confiscated' : ''}`,
+      ctx.fillText(`-$${this.penalty.toLocaleString('en-US')}${this.arrested ? '  ·  weapons confiscated' : ''}`,
         VIEW_W / 2, VIEW_H / 2 + 40);
     }
     if (this.timer <= 0) {

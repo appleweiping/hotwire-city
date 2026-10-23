@@ -131,8 +131,8 @@ pull over to deploy two officers when the player is on foot.
 
 ## 7. Death & arrest (arcade rules)
 
-- **WASTED**: −30% cash (min $150) → hospital respawn.
-- **BUSTED**: −20% cash (min $100) + weapons confiscated → police station.
+- **FLATLINED** (killed): −30% cash (min $150) → hospital respawn.
+- **CUFFED** (arrested): −20% cash (min $100) + weapons confiscated → police station.
 - Both: 2 s death cam while the world keeps running, heat cleared, 2 s
   invulnerability. No game over — cash is the score; the best run persists
   in localStorage.

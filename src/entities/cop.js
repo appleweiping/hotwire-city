@@ -207,7 +207,7 @@ export class Cop extends Entity {
     }
     this.arrestTimer -= dt;
     if (this.arrestTimer <= 0) {
-      world.onPlayerBusted && world.onPlayerBusted(this);
+      world.onPlayerArrested && world.onPlayerArrested(this);
     }
   }
 
